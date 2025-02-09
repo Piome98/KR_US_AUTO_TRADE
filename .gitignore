@@ -169,6 +169,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+<<<<<<< HEAD
 
 # yaml configuration file
 .yaml
+=======
+>>>>>>> eb6620a (Initial commit)
