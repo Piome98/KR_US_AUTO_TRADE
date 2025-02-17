@@ -1,0 +1,22 @@
+#T실전투자
+APP_KEY_REAL: 'PSyUZoiwNrBzw1pgVJAjUpTXFWd8tb38uV7d'
+APP_SECRET_REAL: 'vj4CzwC9QoRJSDzQ1vtxpFAYjvVIWk3xYyhvOm9TTc3ucj52D7wcQwvqPfhsiSQo4WvKEB9s/Mk7fzuWb2z2dKNCFGtZuBBOS78ntZyZFeo/kiKX7v+hJWMRSwMmga+XwV/T7BijlR3QmQinzrWug1voGCUsfk2k7Rnixl4Vq4jeIhpGYpE='
+
+#모의투자
+APP_KEY_VTS: "PSM7rDSNnPXDU744WR1gXhrez2piSARtf5FY"
+APP_SECRET_VTS: "fgyQpVQncQUqOfGqSlOOyjItHu785vCC0n4KIkoGqXXusPDRUr5E/m8gJ+6CdlLN3Eo+fefFoWJfEOHzmsH8mctTFeFtWLi1bCLl2WA4OHpKZp5GiWK03NIVl9oy97qXPGyioMIbLAfFK99+7dLmnjJKPa7/4IdjSfuRPbrEvAza0HTYMug="
+
+
+#실전/모의 계좌번호 앞 8자리
+CANO_REAL: "68612737"
+CANO_VTS: "50124280"
+#계좌번호 뒤 2자리
+ACNT_PRDT_CD: "01"
+
+#실전투자
+URL_BASE_REAL: "https://openapi.koreainvestment.com:9443"
+#모의투자
+URL_BASE_VTS: "https://openapivts.koreainvestment.com:29443"
+
+#디스코드 웹훅 URL -> 주문 체결 및 잔고 현황 등 정보를 디스코드로 전달
+DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/1335952109064945774/7klnc0mgId0C5MOiZIMClZM3ZXS4uXe7SD6Apreoei2EmkxEc9n8Fsp-ow7V1Zs8JrO6"
