@@ -5,6 +5,7 @@
 import requests
 import json
 import datetime
+import time
 from korea_stock_auto.utility.kr_config import DISCORD_WEBHOOK_URL, APP_KEY, APP_SECRET, URL_BASE
 
 def send_message(msg):
@@ -20,6 +21,7 @@ def send_message(msg):
     except Exception as e:
         print(f"Error sending Discord message: {e}")
     print(message)
+    time.sleep(1)
 
 def hashkey(datas):
     """

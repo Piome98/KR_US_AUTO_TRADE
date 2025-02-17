@@ -157,37 +157,68 @@ def sell_stock(stock_code, quantity):
         raise Exception(f"매도 실패: {error_json}")
 
 
-# 실시간 거래량 상위 종목 조회
+
+# 실시간 거래량 상위 종목 조회:
 def get_top_traded_stocks():
     URL = f"{URL_BASE_REAL}/uapi/domestic-stock/v1/quotations/volume-rank"
     send_message(f"📡 API 요청 URL: {URL}")
 
     headers = {
-        "Content-Type": "application/json",
+        "Content-Type": "application/json; charset=utf-8",
         "authorization": f"Bearer {ACCESS_TOKEN}",
         "appKey": APP_KEY_REAL,
         "appSecret": APP_SECRET_REAL,
-        "tr_id": "FHPST01710000",  
+        "tr_id": "FHPST01710000",
     }
-    params = {"fid_cond_mrkt_div_code": "J"}
-
-    try:
-        res = requests.get(URL, headers=headers, params=params)
-    except Exception as e:
-        send_message(f"❌ API 요청 실패: {str(e)}")
-        return []
-
-    if res.status_code != 200:
-        send_message(f"❌ API 요청 실패 (HTTP {res.status_code}): {res.text}")
-        return []
+    
+    params = {
+        "FID_COND_MRKT_DIV_CODE": "J",          # 조건 시장 분류 코드
+        "FID_COND_SCR_DIV_CODE": "20171",         # 조건 화면 분류 코드
+        "FID_INPUT_ISCD": "0000",                 # 전체 종목 (전체)
+        "FID_DIV_CLS_CODE": "1",                  # 분류 구분 코드 (보통주)
+        "FID_BLNG_CLS_CODE": "0",                 # 소속 구분 코드 (평균거래량 기준)
+        "FID_TRGT_CLS_CODE": "111111111",         # 대상 구분 코드 (모두 포함)
+        "FID_TRGT_EXLS_CLS_CODE": "0000000000",     # 대상 제외 구분 코드 (제외 없음)
+        "FID_INPUT_PRICE_1": "3000",              # 최소 가격 3000원 이상
+        "FID_INPUT_PRICE_2": "",                  # 상한 가격 없음 (공란)
+        "FID_VOL_CNT": "",                        # 거래량 필터 (공란)
+        "FID_INPUT_DATE_1": ""                    # 날짜 제한 없음 (공란)
+    }
+    
+    max_retries = 3
+    delay = 1  # 첫 재시도까지 1초 대기
+    for attempt in range(max_retries):
+        try:
+            res = requests.get(URL, headers=headers, params=params)
+        except Exception as e:
+            send_message(f"❌ API 요청 실패: {str(e)}")
+            return []
+        
+        if res.status_code == 200:
+            break
+        else:
+            send_message(f"❌ API 요청 실패 (HTTP {res.status_code}): {res.text} (재시도 {attempt+1}/{max_retries})")
+            time.sleep(delay)
+            delay *= 2  # 재시도 간격을 지수적으로 증가
+            if attempt == max_retries - 1:
+                return []
 
     try:
         res_json = res.json()
-        send_message(f"✅ API 응답 확인: {res_json}")
-        return res_json.get("output", [])
+        output = res_json.get("output", [])
+        if output:
+            for stock in output:
+                prdt_name = stock.get("hts_kor_isnm", "N/A")
+                code = stock.get("mksc_shrn_iscd", "N/A")
+                send_message(f"관심종목 후보: {prdt_name} ({code})")
+        else:
+            send_message("❌ API 응답에 관심 종목 데이터가 없습니다.")
+        return output
     except Exception as e:
         send_message(f"❌ JSONDecodeError: {str(e)} -> {res.text}")
         return []
+
+
 
 
 # 시가총액 및 30일 평균 거래량 조회
@@ -203,7 +234,7 @@ def get_stock_info(code):
     params = {
         "FID_COND_MRKT_DIV_CODE": "J",         # 국내 주식 시장
         "FID_COND_SCR_DIV_CODE": "20171",        # 조건 화면 분류 코드
-        "FID_INPUT_ISCD": "0000",                # 전체 종목
+        "FID_INPUT_ISCD": "code",                # 전체 종목
         "FID_DIV_CLS_CODE": "1",                 # 보통주주
         "FID_BLNG_CLS_CODE": "1",                # 거래 증가율 순 정렬
         "FID_TRGT_CLS_CODE": "111111111",        # 증거금 30~100% 포함
@@ -268,6 +299,8 @@ def get_stock_data(code, period_div_code):
         try:
             data = response.json()
             if data.get('rt_cd') == '0':
+                # API 호출 간 간격을 두기 위해 1초 딜레이 추가
+                time.sleep(1)
                 return data.get('output', [])
             else:
                 send_message(f"API 응답 오류: {data.get('msg1')}")
