@@ -152,35 +152,20 @@ def get_moving_average(code, period=MOVING_AVG_PERIOD):
 
 
 
-def set_interest_stocks(stocks):
+def set_interest_stocks(selected_stocks):
     global symbol_list
-    symbol_list = stocks
+    symbol_list = selected_stocks
 
 def auto_trade():
-    from korea_stock_auto.trading.real_trade.kr_stock_api import get_current_price
-    import datetime
 
     send_message("🚀 자동 매매 시작")
     global symbol_list  # 전역 변수 symbol_list를 사용
-   
+
+    # 최초 한 번만 관심종목 선정
     if not symbol_list:
         symbol_list = select_interest_stocks()
-  
-    last_selection_time = datetime.datetime.now()
-
+    # 이후에는 선정된 종목 목록을 그대로 사용
     while True:
-        now = datetime.datetime.now()
-        # 만약 현재 시간이 오후 3시 30분 이전이면
-        if now.hour < 15 or (now.hour == 15 and now.minute < 30):
-            # 마지막 관심종목 선정 이후 30분이 지났고, 아직 매매중인 종목이 없으면 재선택
-            if (now - last_selection_time).total_seconds() >= 1800 and not entry_prices:
-                send_message("30분 경과 - 관심 종목 재검색")
-                symbol_list = select_interest_stocks()
-                last_selection_time = now
-        else:
-            # 오후 3시 30분 이후에는 자동 매매만 진행 (매매중인 종목이 있으면 재선택 건너뜀)
-            pass
-
         # 관심종목 리스트를 기반으로 자동 매매 로직 실행
         for code in symbol_list:
             prices = [get_current_price(code) for _ in range(60)]
