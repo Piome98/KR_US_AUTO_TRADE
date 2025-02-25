@@ -76,15 +76,18 @@ def get_stock_balance():
 # 국내 주식 실시간 시세
 def get_current_price(code):
     """현재가 조회"""
-    while True:
+    retry_count = 0
+    while retry_count < 3: # 최대 3회 재시도도
         try:
             # 큐에서 시세 데이터 가져오기 (전용 모듈에서 가져온 price_queue 사용)
             received_code, price = price_queue.get(timeout=10)  # 10초 대기
             if received_code == code:
                 return price
         except queue.Empty:
-            send_message("실시간 시세 데이터를 수신하지 못했습니다.")
-            return None
+            send_message(f"⚠️ {code}의 실시간 시세 데이터를 수신하지 못함. 재시도 중... ({retry_count+1}/3)")
+            retry_count += 1
+    send_message(f"❌ {code}의 실시간 시세 데이터 수신 실패")
+    return None
 
 
 # 종목 매수 주문

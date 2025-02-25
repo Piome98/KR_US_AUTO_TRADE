@@ -152,9 +152,11 @@ def get_moving_average(code, period=MOVING_AVG_PERIOD):
 
 
 
-def set_interest_stocks(selected_stocks):
-    global symbol_list
-    symbol_list = selected_stocks
+def set_interest_stocks(stocks):
+    from korea_stock_auto.shared.global_vars import symbol_list
+    symbol_list.clear()
+    symbol_list.extend(stocks)
+    send_message("📊 관심 종목 설정 완료")
 
 def auto_trade():
 
@@ -163,8 +165,15 @@ def auto_trade():
 
     # 최초 한 번만 관심종목 선정
     if not symbol_list:
+        send_message("⚠️ 관심 종목 리스트가 비어 있습니다! 관심 종목을 다시 설정합니다.")
         symbol_list = select_interest_stocks()
+        if not symbol_list:
+            send_message("⚠️ 관심 종목이 없습니다. 프로그램을 종료합니다.")
+            return
     # 이후에는 선정된 종목 목록을 그대로 사용
+
+    send_message(f"📊 관심 종목: {symbol_list}")
+    
     while True:
         # 관심종목 리스트를 기반으로 자동 매매 로직 실행
         for code in symbol_list:

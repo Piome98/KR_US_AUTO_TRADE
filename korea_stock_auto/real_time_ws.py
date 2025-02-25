@@ -67,6 +67,7 @@ def on_message(ws, message):
                 price = None
             send_message(f"📊 [{code}] 현재가: {price}원")
             if code and price is not None:
+                send_message(f"✅ {code}의 현재가 {price}이(가) price_queue에 추가됨.")
                 price_queue.put((code, price))
             from korea_stock_auto.trading.real_trade.kr_stock_api import buy_stock, sell_stock
             if target_buy_price.get(code) and price <= target_buy_price[code]:
@@ -115,6 +116,7 @@ def start_websocket():
         if not symbol_list:
             send_message("⚠️ 관심 종목 없음! 웹소켓 구독 요청 진행 중단.")
             return
+        send_message(f"📡 웹소켓 구독 요청 중: {symbol_list}")
         if not WS_CONN_KEY:
             send_message("⚠️ WebSocket 접속키 없음. 웹소켓 실행 중단.")
             return
