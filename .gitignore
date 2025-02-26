@@ -172,7 +172,7 @@ cython_debug/
 .pypirc
 
 # yaml configuration file
-.yaml
+*.yaml
 
 # textfile
-.txt
+*.txt
