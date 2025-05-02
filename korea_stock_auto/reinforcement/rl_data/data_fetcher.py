@@ -9,7 +9,7 @@ import numpy as np
 import datetime
 import yfinance as yf
 from korea_stock_auto.utils import send_message
-from korea_stock_auto.database import DatabaseManager
+from korea_stock_auto.data.database import DatabaseManager
 
 
 class DataFetcher:

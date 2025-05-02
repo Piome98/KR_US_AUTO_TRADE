@@ -7,9 +7,9 @@ import time
 import signal
 import sys
 
-from korea_stock_auto.utils import send_message
-from korea_stock_auto.trading import StockTrader
-from korea_stock_auto.websocket import StockWebSocket
+from korea_stock_auto.utils.utils import send_message
+from korea_stock_auto.trading.trading import StockTrader
+from korea_stock_auto.api.websocket import StockWebSocket
 
 def signal_handler(sig, frame):
     """

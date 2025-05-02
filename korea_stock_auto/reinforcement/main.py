@@ -7,12 +7,12 @@ import argparse
 import datetime
 import pandas as pd
 from korea_stock_auto.utils import send_message
-from korea_stock_auto.database import DatabaseManager
-from korea_stock_auto.reinforcement.data.data_fetcher import DataFetcher
-from korea_stock_auto.reinforcement.data.data_processor import DataProcessor
+from korea_stock_auto.data.database import DatabaseManager
+from korea_stock_auto.reinforcement.rl_data.data_fetcher import DataFetcher
+from korea_stock_auto.reinforcement.rl_data.data_processor import DataProcessor
 from korea_stock_auto.reinforcement.training.trainer import ModelTrainer, create_ensemble_from_best_models
-from korea_stock_auto.reinforcement.models.rl_model import RLModel, ModelEnsemble
-from korea_stock_auto.reinforcement.utils.model_utils import (
+from korea_stock_auto.reinforcement.rl_models.rl_model import RLModel, ModelEnsemble
+from korea_stock_auto.reinforcement.rl_utils.model_utils import (
     list_available_models, 
     load_model_by_id, 
     compare_models, 
@@ -159,7 +159,7 @@ def test_model(args):
             )
         else:
             # 앙상블 모델 테스트
-            from korea_stock_auto.reinforcement.models.rl_model import TradingEnvironment
+            from korea_stock_auto.reinforcement.rl_models.rl_model import TradingEnvironment
             env = TradingEnvironment(df=processed_data)
             
             # 거래 시뮬레이션
@@ -263,7 +263,7 @@ def backtest(args):
             return
         
         # 백테스트 환경 설정
-        from korea_stock_auto.reinforcement.models.rl_model import TradingEnvironment
+        from korea_stock_auto.reinforcement.rl_models.rl_model import TradingEnvironment
         env = TradingEnvironment(
             df=processed_data,
             initial_balance=10000000,  # 1천만원

@@ -58,7 +58,17 @@ TRADE_CONFIG = {
     "buy_percentage": 0.25,        # 종목당 매수 금액 비율
     "macd_short": 5,               # MACD 단기 기간
     "macd_long": 60,               # MACD 장기 기간
-    "moving_avg_period": 20        # 이동평균선 기간
+    "moving_avg_period": 20,       # 이동평균선 기간
+    
+    # 위험 관리 관련 설정
+    "daily_loss_limit": 500000,    # 일일 최대 손실 제한 (원) - 절대값
+    "daily_loss_limit_pct": 5.0,   # 일일 최대 손실 제한 (총 자산의 %)
+    "daily_profit_limit_pct": 5.0, # 일일 최대 수익 제한 (총 자산의 %)
+    "position_loss_limit": 50000,  # 단일 포지션 최대 손실 제한 (원)
+    "max_position_size": 1000,     # 최대 포지션 크기 (주)
+    "trailing_stop_pct": 3.0,      # 트레일링 스탑 비율 (%)
+    # "max_day_trade_count": 10,   # 일일 최대 거래 횟수 - 제거됨
+    "exposure_limit_pct": 70       # 최대 노출도 비율 (%)
 }
 
 # 관심 종목 필터링 기준

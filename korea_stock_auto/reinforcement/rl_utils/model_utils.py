@@ -9,7 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import datetime
 from korea_stock_auto.utils import send_message
-from korea_stock_auto.reinforcement.models.rl_model import RLModel, ModelEnsemble
+from korea_stock_auto.reinforcement.rl_models.rl_model import RLModel, ModelEnsemble
 
 
 def list_available_models(models_dir="models"):
@@ -131,7 +131,7 @@ def compare_models(model_ids, test_data, models_dir="models", output_path=None):
                 continue
                 
             # 평가 환경 설정
-            from korea_stock_auto.reinforcement.models.rl_model import TradingEnvironment
+            from korea_stock_auto.reinforcement.rl_models.rl_model import TradingEnvironment
             env = TradingEnvironment(df=test_data)
             
             # 에피소드 실행
@@ -208,7 +208,7 @@ def visualize_model_performance(model_id, test_data, models_dir="models", output
             return False
             
         # 평가 환경 설정
-        from korea_stock_auto.reinforcement.models.rl_model import TradingEnvironment
+        from korea_stock_auto.reinforcement.rl_models.rl_model import TradingEnvironment
         env = TradingEnvironment(df=test_data)
         
         # 에피소드 실행

@@ -10,10 +10,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import datetime
 from sklearn.model_selection import train_test_split
-from korea_stock_auto.reinforcement.data.data_processor import DataProcessor
-from korea_stock_auto.reinforcement.models.rl_model import TradingEnvironment, RLModel, ModelEnsemble
+from korea_stock_auto.reinforcement.rl_data.data_processor import DataProcessor
+from korea_stock_auto.reinforcement.rl_models.rl_model import TradingEnvironment, RLModel, ModelEnsemble
 from korea_stock_auto.utils import send_message
-from korea_stock_auto.database import DatabaseManager
+from korea_stock_auto.data.database import DatabaseManager
 
 class ModelTrainer:
     """강화학습 모델 학습 및 평가 클래스"""
