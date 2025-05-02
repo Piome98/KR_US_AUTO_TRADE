@@ -1,0 +1,22 @@
+# 기본 패키지
+numpy==1.26.4
+pandas>=2.2.0
+matplotlib>=3.10.0
+scikit-learn>=1.6.0
+
+# 금융 데이터 분석
+TA-Lib==0.4.28
+pandas-datareader>=0.10.0
+pyarrow>=20.0.0
+
+# 강화학습
+gym>=0.26.2
+stable-baselines3>=2.6.0
+gymnasium>=1.1.1
+
+# 데이터베이스
+sqlalchemy>=2.0.40
+pymysql>=1.1.0
+
+# 유틸리티
+cloudpickle>=3.0.0 
