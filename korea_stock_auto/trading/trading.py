@@ -10,7 +10,7 @@ from korea_stock_auto.config import (
     TRADE_CONFIG, STOCK_FILTER
 )
 from korea_stock_auto.utils.utils import send_message, wait
-from korea_stock_auto.api.api_client import APIClient
+from korea_stock_auto.api import KoreaInvestmentApiClient
 from korea_stock_auto.models.model_manager import ModelVersionManager
 
 class StockTrader:
@@ -18,7 +18,7 @@ class StockTrader:
     
     def __init__(self):
         """트레이더 초기화"""
-        self.api = APIClient()
+        self.api = KoreaInvestmentApiClient()
         # 모델 관리자 초기화
         self.model_manager = ModelVersionManager()
         self.initialize_trading()
