@@ -1,9 +1,9 @@
 """
-한국 주식 자동매매 - API 패키지
+Base module for Korea Investment & Securities API Client
 """
 
 from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
 
 __all__ = [
-    'KoreaInvestmentApiClient'
+    'KoreaInvestmentApiClient',
 ] 
