@@ -226,6 +226,9 @@ class APIClient:
             
         Returns:
             dict or None: 주식 현재가 정보
+            
+        Notes:
+            모의투자 지원 함수입니다.
         """
         path = "uapi/domestic-stock/v1/quotations/inquire-price"
         url = f"{URL_BASE}/{path}"
@@ -245,11 +248,49 @@ class APIClient:
             res = requests.get(url, headers=headers, params=params, timeout=10)
             result = self._handle_response(res, f"{code} 현재가 조회 실패")
             
-            if result and result.get("rt_cd") == "0":
-                price = result.get("output", {}).get("stck_prpr", "0")
-                logger.info(f"{code} 현재가 조회 성공: {price}원")
+            if not result or result.get("rt_cd") != "0":
+                return None
             
-            return result
+            output = result.get("output", {})
+            
+            # 주요 정보 추출 및 가공
+            price_info = {
+                "stock_code": code,
+                "stock_name": output.get("prdt_abrv_name", ""),
+                "market": output.get("rprs_mrkt_kor_name", ""),
+                "time": output.get("stck_basc_hour", ""),
+                "current_price": int(output.get("stck_prpr", "0").replace(',', '')),
+                "open_price": int(output.get("stck_oprc", "0").replace(',', '')),
+                "high_price": int(output.get("stck_hgpr", "0").replace(',', '')),
+                "low_price": int(output.get("stck_lwpr", "0").replace(',', '')),
+                "prev_close_price": int(output.get("stck_sdpr", "0").replace(',', '')),
+                "price_change": int(output.get("prdy_vrss", "0").replace(',', '')),
+                "change_rate": float(output.get("prdy_ctrt", "0")),
+                "volume": int(output.get("acml_vol", "0").replace(',', '')),
+                "volume_value": int(output.get("acml_tr_pbmn", "0").replace(',', '')),
+                "market_cap": int(output.get("hts_avls", "0").replace(',', '')),
+                "listed_shares": int(output.get("lstn_stcn", "0").replace(',', '')),
+                "highest_52_week": int(output.get("w52_hgpr", "0").replace(',', '')),
+                "lowest_52_week": int(output.get("w52_lwpr", "0").replace(',', '')),
+                "per": float(output.get("per", "0").replace(',', '')),
+                "eps": float(output.get("eps", "0").replace(',', '')),
+                "pbr": float(output.get("pbr", "0").replace(',', '')),
+                "div_yield": float(output.get("dvr", "0").replace(',', '')),
+                "foreign_rate": float(output.get("frgn_hldn_qty_rt", "0").replace(',', ''))
+            }
+            
+            # 추가 분석 정보
+            price_info["day_range_rate"] = ((price_info["high_price"] - price_info["low_price"]) / price_info["low_price"] * 100) if price_info["low_price"] > 0 else 0
+            price_info["current_to_open_rate"] = ((price_info["current_price"] - price_info["open_price"]) / price_info["open_price"] * 100) if price_info["open_price"] > 0 else 0
+            price_info["is_52week_high"] = price_info["current_price"] >= price_info["highest_52_week"]
+            price_info["is_52week_low"] = price_info["current_price"] <= price_info["lowest_52_week"]
+            
+            # 매매 신호 관련 정보 (단순 분석 목적)
+            price_info["gap_from_52week_high"] = ((price_info["highest_52_week"] - price_info["current_price"]) / price_info["current_price"] * 100) if price_info["current_price"] > 0 else 0
+            price_info["gap_from_52week_low"] = ((price_info["current_price"] - price_info["lowest_52_week"]) / price_info["lowest_52_week"] * 100) if price_info["lowest_52_week"] > 0 else 0
+            
+            logger.info(f"{code} 현재가 조회 성공: {price_info['current_price']}원 ({price_info['change_rate']}%)")
+            return price_info
             
         except Exception as e:
             logger.error(f"{code} 현재가 조회 실패: {e}", exc_info=True)
@@ -1649,3 +1690,463 @@ class APIClient:
             logger.error(f"실현손익 조회 실패: {e}", exc_info=True)
             send_message(f"[오류] 실현손익 조회 실패: {e}")
             return None 
+
+    def get_stock_asking_price(self, code: str) -> Optional[Dict[str, Any]]:
+        """
+        주식 현재가 호가 조회
+        
+        Args:
+            code (str): 종목 코드
+            
+        Returns:
+            dict or None: 주식 호가 정보
+            
+        Notes:
+            모의투자 지원 함수입니다.
+        """
+        path = "uapi/domestic-stock/v1/quotations/inquire-asking-price"
+        url = f"{URL_BASE}/{path}"
+        
+        params = {
+            "fid_cond_mrkt_div_code": "J",
+            "fid_input_iscd": code,
+        }
+        
+        headers = self._get_headers("FHKST01010200")
+        
+        try:
+            # API 호출 속도 제한 적용
+            self._rate_limit()
+            
+            logger.info(f"{code} 호가 조회 요청")
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            result = self._handle_response(res, f"{code} 호가 조회 실패")
+            
+            if not result or result.get("rt_cd") != "0":
+                return None
+                
+            # 매도/매수 호가 정보 추출
+            output = result.get("output", {})
+            
+            # 10단계 호가 정보 정리
+            asking_prices = {
+                "stock_code": code,
+                "time": output.get("stck_bsop_hour", ""),
+                "total_ask_qty": int(output.get("total_askp_rsqn", "0").replace(',', '')),
+                "total_bid_qty": int(output.get("total_bidp_rsqn", "0").replace(',', '')),
+                "asks": [],  # 매도호가
+                "bids": [],  # 매수호가
+                "ask_prices": [],  # 매도호가 가격만
+                "bid_prices": [],  # 매수호가 가격만
+                "ask_quantities": [],  # 매도호가 수량만
+                "bid_quantities": []   # 매수호가 수량만
+            }
+            
+            # 매도호가 정보 추출 (1~10)
+            for i in range(1, 11):
+                ask_price = int(output.get(f"askp{i}", "0").replace(',', ''))
+                ask_qty = int(output.get(f"askp_rsqn{i}", "0").replace(',', ''))
+                
+                asking_prices["asks"].append({"price": ask_price, "quantity": ask_qty})
+                asking_prices["ask_prices"].append(ask_price)
+                asking_prices["ask_quantities"].append(ask_qty)
+            
+            # 매수호가 정보 추출 (1~10)
+            for i in range(1, 11):
+                bid_price = int(output.get(f"bidp{i}", "0").replace(',', ''))
+                bid_qty = int(output.get(f"bidp_rsqn{i}", "0").replace(',', ''))
+                
+                asking_prices["bids"].append({"price": bid_price, "quantity": bid_qty})
+                asking_prices["bid_prices"].append(bid_price)
+                asking_prices["bid_quantities"].append(bid_qty)
+            
+            # 최고/최저 호가
+            asking_prices["highest_ask"] = asking_prices["ask_prices"][0]
+            asking_prices["lowest_bid"] = asking_prices["bid_prices"][0]
+            
+            # 호가 스프레드
+            asking_prices["spread"] = asking_prices["highest_ask"] - asking_prices["lowest_bid"]
+            
+            logger.info(f"{code} 호가 조회 성공")
+            return asking_prices
+            
+        except Exception as e:
+            logger.error(f"{code} 호가 조회 실패: {e}", exc_info=True)
+            send_message(f"[오류] {code} 호가 조회 실패: {e}")
+            return None
+
+    def get_stock_conclusion(self, code: str) -> Optional[Dict[str, Any]]:
+        """
+        주식 현재가 체결 정보 조회
+        
+        Args:
+            code (str): 종목 코드
+            
+        Returns:
+            dict or None: 주식 체결 정보
+            
+        Notes:
+            모의투자 지원 함수입니다.
+        """
+        path = "uapi/domestic-stock/v1/quotations/inquire-ccnl"
+        url = f"{URL_BASE}/{path}"
+        
+        params = {
+            "fid_cond_mrkt_div_code": "J",
+            "fid_input_iscd": code,
+        }
+        
+        headers = self._get_headers("FHPST01010300")
+        
+        try:
+            # API 호출 속도 제한 적용
+            self._rate_limit()
+            
+            logger.info(f"{code} 체결 정보 조회 요청")
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            result = self._handle_response(res, f"{code} 체결 정보 조회 실패")
+            
+            if not result or result.get("rt_cd") != "0":
+                return None
+                
+            # 체결 정보 추출
+            output1 = result.get("output1", {})
+            output2 = result.get("output2", [])
+            
+            if not output2:
+                logger.warning(f"{code} 체결 정보가 없습니다.")
+                return {
+                    "stock_code": code,
+                    "stock_name": output1.get("hts_kor_isnm", ""),
+                    "conclusions": []
+                }
+            
+            # 현재가 정보
+            current_info = {
+                "stock_code": code,
+                "stock_name": output1.get("hts_kor_isnm", ""),
+                "current_price": int(output1.get("stck_prpr", "0").replace(',', '')),
+                "price_change": int(output1.get("prdy_vrss", "0").replace(',', '')),
+                "change_rate": float(output1.get("prdy_ctrt", "0").replace(',', '')),
+                "volume": int(output1.get("acml_vol", "0").replace(',', '')),
+                "conclusions": []
+            }
+            
+            # 체결 내역 정보 추출
+            for item in output2:
+                conclusion = {
+                    "time": item.get("stck_cntg_hour", ""),
+                    "price": int(item.get("stck_prpr", "0").replace(',', '')),
+                    "quantity": int(item.get("cntg_qty", "0").replace(',', '')),
+                    "change_type": item.get("prdy_vrss_sign", ""),  # 1:상한, 2:상승, 3:보합, 4:하한, 5:하락
+                    "volume": int(item.get("acml_vol", "0").replace(',', '')),
+                }
+                current_info["conclusions"].append(conclusion)
+            
+            logger.info(f"{code} 체결 정보 조회 성공: {len(current_info['conclusions'])}건")
+            return current_info
+            
+        except Exception as e:
+            logger.error(f"{code} 체결 정보 조회 실패: {e}", exc_info=True)
+            send_message(f"[오류] {code} 체결 정보 조회 실패: {e}")
+            return None
+
+    def get_stock_time_conclusion(self, code: str, time_interval: str = "1", count: int = 100) -> Optional[Dict[str, Any]]:
+        """
+        주식 당일 시간대별 체결 내역 조회
+        
+        Args:
+            code (str): 종목 코드
+            time_interval (str): 시간 간격 (1: 1분, 3: 3분, 5: 5분, 10: 10분, 30: 30분, 60: 60분)
+            count (int): 조회할 데이터 개수 (최대 100)
+            
+        Returns:
+            dict or None: 시간대별 체결 내역
+            
+        Notes:
+            모의투자 지원 함수입니다.
+        """
+        path = "uapi/domestic-stock/v1/quotations/inquire-time-conc"
+        url = f"{URL_BASE}/{path}"
+        
+        # 최대 100개로 제한
+        if count > 100:
+            count = 100
+        
+        params = {
+            "fid_cond_mrkt_div_code": "J",
+            "fid_input_iscd": code,
+            "fid_input_hour_1": time_interval,
+            "fid_etc_cls_code": "",
+            "fid_ord_div_code": "",
+            "fid_input_price_1": "0",
+            "fid_input_price_2": "0",
+            "fid_vol_cnt": str(count),
+            "fid_input_date_1": ""
+        }
+        
+        headers = self._get_headers("FHPST01060000")
+        
+        try:
+            # API 호출 속도 제한 적용
+            self._rate_limit()
+            
+            logger.info(f"{code} {time_interval}분 시간대별 체결 내역 조회 요청")
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            result = self._handle_response(res, f"{code} 시간대별 체결 내역 조회 실패")
+            
+            if not result or result.get("rt_cd") != "0":
+                return None
+                
+            # 시간대별 체결 정보 추출
+            output1 = result.get("output1", {})
+            output2 = result.get("output2", [])
+            
+            if not output2:
+                logger.warning(f"{code} 시간대별 체결 내역이 없습니다.")
+                return {
+                    "stock_code": code,
+                    "stock_name": output1.get("hts_kor_isnm", ""),
+                    "time_interval": time_interval,
+                    "time_conclusions": []
+                }
+            
+            # 현재가 및 기본 정보
+            time_conclusion_info = {
+                "stock_code": code,
+                "stock_name": output1.get("hts_kor_isnm", ""),
+                "current_price": int(output1.get("stck_prpr", "0").replace(',', '')),
+                "time_interval": time_interval,
+                "time_conclusions": []
+            }
+            
+            # 시간대별 체결 내역 정보 추출
+            for item in output2:
+                time_data = {
+                    "time": item.get("stck_cntg_hour", ""),
+                    "close_price": int(item.get("stck_prpr", "0").replace(',', '')),
+                    "open_price": int(item.get("stck_oprc", "0").replace(',', '')),
+                    "high_price": int(item.get("stck_hgpr", "0").replace(',', '')),
+                    "low_price": int(item.get("stck_lwpr", "0").replace(',', '')),
+                    "volume": int(item.get("cntg_vol", "0").replace(',', '')),
+                    "cumulative_volume": int(item.get("acml_vol", "0").replace(',', '')),
+                    "change_price": int(item.get("prdy_vrss", "0").replace(',', '')),
+                    "change_rate": float(item.get("prdy_ctrt", "0").replace(',', ''))
+                }
+                time_conclusion_info["time_conclusions"].append(time_data)
+            
+            logger.info(f"{code} {time_interval}분 시간대별 체결 내역 조회 성공: {len(time_conclusion_info['time_conclusions'])}건")
+            return time_conclusion_info
+            
+        except Exception as e:
+            logger.error(f"{code} 시간대별 체결 내역 조회 실패: {e}", exc_info=True)
+            send_message(f"[오류] {code} 시간대별 체결 내역 조회 실패: {e}")
+            return None
+
+    def get_stock_minute_data(self, code: str, minute_unit: str = "1", count: int = 100) -> Optional[Dict[str, Any]]:
+        """
+        주식 당일 분봉 데이터 조회
+        
+        Args:
+            code (str): 종목 코드
+            minute_unit (str): 분봉 단위 (1: 1분, 3: 3분, 5: 5분, 10: 10분, 30: 30분, 60: 60분)
+            count (int): 조회할 데이터 개수 (최대 100)
+            
+        Returns:
+            dict or None: 당일 분봉 데이터
+            
+        Notes:
+            모의투자 지원 함수입니다.
+        """
+        path = "uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+        url = f"{URL_BASE}/{path}"
+        
+        # 최대 100개로 제한
+        if count > 100:
+            count = 100
+        
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": code,
+            "FID_INPUT_DATE_1": "",  # 빈 값으로 두면 당일 데이터
+            "FID_INPUT_DATE_2": "",
+            "FID_PERIOD_DIV_CODE": minute_unit + "T",  # 1T, 3T, 5T, 10T, 30T, 60T
+            "FID_ORG_ADJ_PRC": "0",
+            "FID_CYCLE_DIV_CODE": "D", # D: 일봉, W: 주봉, M: 월봉
+            "FID_DIV_CODE": "0",
+            "FID_COMP_VALL": str(count),  # 요청 개수
+        }
+        
+        headers = self._get_headers("FHKST03010200")
+        
+        try:
+            # API 호출 속도 제한 적용
+            self._rate_limit()
+            
+            logger.info(f"{code} {minute_unit}분봉 데이터 조회 요청")
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            result = self._handle_response(res, f"{code} 분봉 데이터 조회 실패")
+            
+            if not result or result.get("rt_cd") != "0":
+                return None
+                
+            # 분봉 데이터 추출
+            output1 = result.get("output1", {})
+            output2 = result.get("output2", [])
+            
+            if not output2:
+                logger.warning(f"{code} 분봉 데이터가 없습니다.")
+                return {
+                    "stock_code": code,
+                    "stock_name": output1.get("hts_kor_isnm", ""),
+                    "minute_unit": minute_unit,
+                    "minute_data": []
+                }
+            
+            # 기본 정보
+            minute_data_info = {
+                "stock_code": code,
+                "stock_name": output1.get("hts_kor_isnm", ""),
+                "minute_unit": minute_unit,
+                "minute_data": []
+            }
+            
+            # 분봉 데이터 추출
+            for item in output2:
+                candle_data = {
+                    "date": item.get("stck_bsop_date", ""),
+                    "time": item.get("stck_cntg_hour", ""),
+                    "open": int(item.get("stck_oprc", "0").replace(',', '')),
+                    "high": int(item.get("stck_hgpr", "0").replace(',', '')),
+                    "low": int(item.get("stck_lwpr", "0").replace(',', '')),
+                    "close": int(item.get("stck_prpr", "0").replace(',', '')),
+                    "volume": int(item.get("cntg_vol", "0").replace(',', '')),
+                    "change_price": int(item.get("prdy_vrss", "0").replace(',', '')),
+                    "change_rate": float(item.get("prdy_ctrt", "0").replace(',', ''))
+                }
+                minute_data_info["minute_data"].append(candle_data)
+            
+            logger.info(f"{code} {minute_unit}분봉 데이터 조회 성공: {len(minute_data_info['minute_data'])}건")
+            return minute_data_info
+            
+        except Exception as e:
+            logger.error(f"{code} 분봉 데이터 조회 실패: {e}", exc_info=True)
+            send_message(f"[오류] {code} 분봉 데이터 조회 실패: {e}")
+            return None
+
+    def get_investor_trends(self, code: str) -> Optional[Dict[str, Any]]:
+        """
+        주식 현재가 투자자별 매매현황 조회
+        
+        Args:
+            code (str): 종목 코드
+            
+        Returns:
+            dict or None: 투자자별 매매현황
+            
+        Notes:
+            모의투자 지원 함수입니다.
+        """
+        path = "uapi/domestic-stock/v1/quotations/inquire-investor"
+        url = f"{URL_BASE}/{path}"
+        
+        params = {
+            "fid_cond_mrkt_div_code": "J",
+            "fid_input_iscd": code,
+        }
+        
+        headers = self._get_headers("FHKST01010900")
+        
+        try:
+            # API 호출 속도 제한 적용
+            self._rate_limit()
+            
+            logger.info(f"{code} 투자자별 매매현황 조회 요청")
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            result = self._handle_response(res, f"{code} 투자자별 매매현황 조회 실패")
+            
+            if not result or result.get("rt_cd") != "0":
+                return None
+                
+            # 투자자별 매매현황 추출
+            output1 = result.get("output1", {})
+            output2 = result.get("output2", [])
+            
+            if not output2:
+                logger.warning(f"{code} 투자자별 매매현황 데이터가 없습니다.")
+                return None
+            
+            # 종목 기본 정보
+            investor_info = {
+                "stock_code": code,
+                "stock_name": output1.get("hts_kor_isnm", ""),
+                "current_price": int(output1.get("stck_prpr", "0").replace(',', '')),
+                "change_rate": float(output1.get("prdy_ctrt", "0").replace(',', '')),
+                "volume": int(output1.get("acml_vol", "0").replace(',', '')),
+                "investors": {}
+            }
+            
+            # 투자자별 매매현황 - 데이터 정의
+            investor_types = {
+                "korea_institution": "금융투자", 
+                "insurance": "보험", 
+                "investment": "투신",
+                "private_equity": "사모펀드", 
+                "bank": "은행", 
+                "pension": "연기금",
+                "korea_general": "기타법인", 
+                "individual": "개인", 
+                "foreign": "외국인",
+                "national": "국가", 
+                "etc": "기타외국인"
+            }
+            
+            # 투자자별 매매현황 데이터 추출
+            for item in output2:
+                investor_type = item.get("bying_sell_invst_tp_nm", "")
+                if investor_type in investor_types.values():
+                    # 영문 키로 변환
+                    key = [k for k, v in investor_types.items() if v == investor_type][0]
+                    
+                    investor_data = {
+                        "name": investor_type,
+                        "today_volume": int(item.get("tddy_cprs_icdc_qty", "0").replace(',', '')),
+                        "yesterday_volume": int(item.get("yndy_cmpr_icdc_qty", "0").replace(',', '')),
+                        "today_amount": int(item.get("tddy_acrq_icdc_amt", "0").replace(',', '')),
+                        "yesterday_amount": int(item.get("yndy_cmpr_icdc_amt", "0").replace(',', ''))
+                    }
+                    
+                    # 순매수(+) 또는 순매도(-) 여부
+                    investor_data["is_net_buying"] = investor_data["today_volume"] > 0
+                    
+                    investor_info["investors"][key] = investor_data
+            
+            # 주요 매매주체 분석
+            # 개인, 외국인, 기관(금융투자+보험+투신+...) 순매수 종합
+            foreign_data = investor_info["investors"].get("foreign", {"today_volume": 0})
+            individual_data = investor_info["investors"].get("individual", {"today_volume": 0})
+            
+            # 기관 순매수 합산 
+            institution_volume = sum(
+                investor_info["investors"].get(key, {"today_volume": 0})["today_volume"]
+                for key in ["korea_institution", "insurance", "investment", 
+                           "private_equity", "bank", "pension"]
+            )
+            
+            # 주요 매매주체 요약 정보
+            investor_info["summary"] = {
+                "foreign_volume": foreign_data.get("today_volume", 0),
+                "individual_volume": individual_data.get("today_volume", 0),
+                "institution_volume": institution_volume,
+                "main_player": "foreign" if abs(foreign_data.get("today_volume", 0)) > max(abs(individual_data.get("today_volume", 0)), abs(institution_volume)) else
+                               "individual" if abs(individual_data.get("today_volume", 0)) > abs(institution_volume) else
+                               "institution"
+            }
+            
+            logger.info(f"{code} 투자자별 매매현황 조회 성공")
+            return investor_info
+            
+        except Exception as e:
+            logger.error(f"{code} 투자자별 매매현황 조회 실패: {e}", exc_info=True)
+            send_message(f"[오류] {code} 투자자별 매매현황 조회 실패: {e}")
+            return None
