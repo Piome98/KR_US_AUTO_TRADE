@@ -6,6 +6,40 @@
 
 ## 최근 변경사항
 
+### 강화학습 데이터 처리 코드 리팩토링 (2025-05-15)
+
+강화학습 데이터 처리 모듈을 리팩토링하여 코드 구조를 개선했습니다:
+
+- **데이터 처리 모듈 분리**:
+  - 기존 `data_processor.py` (647줄)를 여러 모듈로 분리하여 단일 책임 원칙 준수
+  - `data_preprocessor.py`: 기본 데이터 로딩 및 정제 기능
+  - `technical_indicators.py`: 기술적 지표 계산 기능
+  - `data_normalizer.py`: 데이터 정규화 기능
+  - `sequence_generator.py`: 시계열 시퀀스 생성 기능
+  - `market_data_integrator.py`: 시장 데이터 통합 기능
+  - `rl_data_manager.py`: 전체 데이터 파이프라인 관리 기능
+
+- **수정 효과**:
+  - 코드 가독성 및 유지보수성 향상
+  - 개별 데이터 처리 기능에 대한 단위 테스트 용이
+  - 로직 분리를 통한 코드 재사용성 강화
+  - 새로운 데이터 처리 기능 추가가 용이해짐
+
+### API 디렉토리 중복 기능 개선 (2025-05-14)
+
+API 디렉토리의 중복 기능을 확인하고 개선했습니다:
+
+- **중복 함수 통합**:
+  - `fetch_stock_current_price()`와 `get_real_time_price_by_api()` 함수의 중복 기능 통합
+  - `get_real_time_price_by_api()` 함수를 직접 API를 호출하도록 수정
+  - `fetch_stock_current_price()` 함수는 내부적으로 `get_real_time_price_by_api()`를 호출하도록 변경
+
+- **개선 효과**:
+  - 코드 중복 제거
+  - API 호출 일관성 향상
+  - 기능 확장 시 한 곳에서만 수정 필요
+  - 유지보수성 향상
+
 ### 코드 오류 수정 및 종속성 추가 (2025-05-12)
 
 강화학습 모듈의 오류를 수정하고 종속성을 추가했습니다:
@@ -190,8 +224,14 @@ API 클라이언트(`api_client.py`) 파일을 기능별로 세분화하여 모�
 
 ### 6. 강화학습 모듈 (reinforcement/)
 
-- **rl_data/data_processor.py**: 강화학습 데이터 전처리
-- **rl_data/data_fetcher.py**: 데이터 수집 및 가져오기
+- **rl_data/**: 강화학습 데이터 처리 모듈 (리팩토링 완료)
+  - **data_fetcher.py**: 데이터 수집 및 가져오기
+  - **data_preprocessor.py**: 기본 데이터 로딩 및 정제
+  - **technical_indicators.py**: 기술적 지표 계산
+  - **data_normalizer.py**: 데이터 정규화
+  - **sequence_generator.py**: 시계열 시퀀스 생성
+  - **market_data_integrator.py**: 시장 데이터 통합
+  - **rl_data_manager.py**: 전체 데이터 파이프라인 관리
 - **rl_models/rl_model.py**: 강화학습 모델 및 환경 정의
 - **rl_utils/model_utils.py**: 모델 관리 유틸리티
 - **training/trainer.py**: 모델 학습 및 평가
@@ -199,9 +239,16 @@ API 클라이언트(`api_client.py`) 파일을 기능별로 세분화하여 모�
 
 ## 강화학습 모듈 상세 설명
 
-### 1. 데이터 전처리 (rl_data/data_processor.py)
+### 1. 데이터 전처리 (rl_data/ 모듈)
 
-데이터 전처리 모듈은 강화학습 모델에 입력할 데이터를 준비하는 역할을 합니다.
+강화학습 데이터 전처리 모듈은 다음과 같이 분리되었습니다:
+
+- **data_preprocessor.py**: 기본 데이터 로딩, 정제 및 전처리
+- **technical_indicators.py**: 기술적 지표 계산 및 추가
+- **data_normalizer.py**: 데이터 정규화
+- **sequence_generator.py**: 시계열 시퀀스 생성
+- **market_data_integrator.py**: 시장 데이터 통합
+- **rl_data_manager.py**: 전체 데이터 파이프라인 관리
 
 **주요 기능:**
 
