@@ -4,13 +4,16 @@
 
 import requests
 import logging
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING
 
 from korea_stock_auto.config import (
     URL_BASE, CANO, ACNT_PRDT_CD, USE_REALTIME_API
 )
 from korea_stock_auto.utils.utils import send_message
-from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
+
+# 타입 힌트만을 위한 조건부 임포트
+if TYPE_CHECKING:
+    from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
 
 logger = logging.getLogger("stock_auto")
 
@@ -27,7 +30,8 @@ class AccountBalanceMixin:
         Notes:
             모의투자 지원 함수입니다.
         """
-        self: KoreaInvestmentApiClient  # type hint
+        # type hint
+        self: "KoreaInvestmentApiClient"
         
         path = "uapi/domestic-stock/v1/trading/inquire-balance"
         url = f"{URL_BASE}/{path}"
@@ -75,7 +79,8 @@ class AccountBalanceMixin:
         Returns:
             dict or None: 주식 보유 정보
         """
-        self: KoreaInvestmentApiClient  # type hint
+        # type hint
+        self: "KoreaInvestmentApiClient"
         
         balance_data = self.fetch_balance()
         
@@ -150,7 +155,8 @@ class AccountBalanceMixin:
                 'total_profit_loss_rate': 총수익률(%)
             }
         """
-        self: KoreaInvestmentApiClient  # type hint
+        # type hint
+        self: "KoreaInvestmentApiClient"
         
         balance_data = self.fetch_balance()
         

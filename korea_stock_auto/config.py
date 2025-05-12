@@ -21,6 +21,7 @@ _cfg = load_config()
 
 # 실전/모의 API 설정
 USE_REALTIME_API = True  # 실전투자: True, 모의투자: False
+is_prod_env = USE_REALTIME_API  # 실전 환경 여부 (websocket.py 호환용)
 
 # API 관련 설정
 APP_KEY_REAL = _cfg['APP_KEY_REAL']

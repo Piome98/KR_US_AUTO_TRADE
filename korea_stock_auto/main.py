@@ -1,118 +1,92 @@
 """
-한국 주식 자동매매 - 메인 모듈
+한국 주식 자동매매 - 메인 스크립트
 """
 
+import os
+import sys
 import argparse
 import logging
-import sys
+import time
 from datetime import datetime
 
-from korea_stock_auto.config import setup_logger
-from korea_stock_auto.api import KoreaInvestmentApiClient
-from korea_stock_auto.utils.utils import send_message
+from korea_stock_auto.config import TRADE_CONFIG
+from korea_stock_auto.utils.utils import send_message, setup_logger
+from korea_stock_auto.trading import Trader
 
-# 로깅 설정
-logger = logging.getLogger("stock_auto")
-setup_logger()
-
-def show_market_info(api_client):
-    """
-    현재 시장 상황 출력
+def parse_args():
+    """명령행 인자 파싱"""
+    parser = argparse.ArgumentParser(description='한국 주식 자동매매 시스템')
     
-    Args:
-        api_client: API 클라이언트 객체
-    """
-    try:
-        # 시장 상황 종합 조회
-        market_status = api_client.get_market_status()
-        summary = market_status["summary"]
-        
-        # 코스피 정보
-        kospi = market_status["kospi"]
-        kospi_info = (f"KOSPI: {kospi['current']:,.2f} "
-                      f"({kospi['status']} {abs(kospi['change_rate']):,.2f}%)")
-        
-        # 코스닥 정보
-        kosdaq = market_status["kosdaq"]
-        kosdaq_info = (f"KOSDAQ: {kosdaq['current']:,.2f} "
-                       f"({kosdaq['status']} {abs(kosdaq['change_rate']):,.2f}%)")
-        
-        # 결과 출력
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"=== 시장 정보 ({now}) ===")
-        logger.info(f"시장 분위기: {summary['market_mood']}")
-        logger.info(kospi_info)
-        logger.info(kosdaq_info)
-        
-        return True
-    except Exception as e:
-        logger.error(f"시장 정보 조회 실패: {e}", exc_info=True)
-        send_message(f"[오류] 시장 정보 조회 실패: {e}")
-        return False
-
-def show_account_info(api_client):
-    """
-    계좌 정보 출력
+    # 기본 설정
+    parser.add_argument('--mode', type=str, default='trade',
+                        choices=['trade', 'backtest', 'analyze'],
+                        help='실행 모드 (trade: 실제 매매, backtest: 백테스트, analyze: 종목 분석)')
+    parser.add_argument('--cycles', type=int, default=0,
+                        help='매매 사이클 수 (0: 무한)')
+    parser.add_argument('--log-level', type=str, default='INFO',
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                        help='로그 레벨')
+    parser.add_argument('--strategy', type=str, default=None,
+                        choices=['macd', 'ma', 'rsi'],
+                        help='매매 전략 (macd, ma, rsi)')
     
-    Args:
-        api_client: API 클라이언트 객체
-    """
-    try:
-        # 예수금 조회
-        deposit = api_client.fetch_deposit()
-        if deposit:
-            logger.info(f"=== 계좌 정보 ===")
-            logger.info(f"주문 가능 금액: {deposit['order_executable_amount']:,}원")
-            logger.info(f"출금 가능 금액: {deposit['withdrawable']:,}원")
-            logger.info(f"총 평가 금액: {deposit['total_balance']:,}원")
-        
-        # 계좌 잔고 조회
-        balance = api_client.fetch_balance()
-        if balance and balance["stocks"]:
-            logger.info(f"=== 보유 종목 ({len(balance['stocks'])}개) ===")
-            
-            for stock in balance["stocks"]:
-                stock_info = (
-                    f"{stock['name']} ({stock['code']}): "
-                    f"{stock['quantity']}주, "
-                    f"평가금액: {stock['evaluation_amount']:,}원, "
-                    f"수익률: {stock['earning_rate']:.2f}%, "
-                    f"수익금: {stock['profit_loss']:,}원"
-                )
-                logger.info(stock_info)
-        
-        return True
-    except Exception as e:
-        logger.error(f"계좌 정보 조회 실패: {e}", exc_info=True)
-        send_message(f"[오류] 계좌 정보 조회 실패: {e}")
-        return False
+    return parser.parse_args()
 
 def main():
     """메인 함수"""
-    parser = argparse.ArgumentParser(description="한국 주식 자동매매 프로그램")
-    parser.add_argument("--status", action="store_true", help="계좌 및 시장 상태 조회")
+    # 명령행 인자 파싱
+    args = parse_args()
     
-    args = parser.parse_args()
+    # 로그 설정
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../logs')
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f'stock_auto_{datetime.now().strftime("%Y%m%d")}.log')
+    setup_logger(args.log_level, log_file)
+    
+    # 로거 가져오기
+    logger = logging.getLogger("stock_auto")
+    
+    # 시작 메시지
+    logger.info("한국 주식 자동매매 시스템 시작")
+    send_message("[시스템 시작] 한국 주식 자동매매 시스템이 시작되었습니다.")
+    
+    # 설정 정보 출력
+    logger.info(f"실행 모드: {args.mode}")
+    logger.info(f"매매 사이클 수: {'무한' if args.cycles == 0 else args.cycles}")
+    
+    # 전략 설정 (명령행 인자가 있는 경우 우선 적용)
+    if args.strategy:
+        TRADE_CONFIG["strategy"] = args.strategy
     
     try:
-        logger.info("한국 주식 자동매매 프로그램 시작")
-        
-        # API 클라이언트 초기화
-        api_client = KoreaInvestmentApiClient()
-        
-        # 단순 상태 조회 모드
-        if args.status:
-            logger.info("상태 조회 모드")
-            show_market_info(api_client)
-            show_account_info(api_client)
-            return
-        
-        # 실제 매매 로직은 여기에 추가
+        # 모드에 따른 처리
+        if args.mode == 'trade':
+            # 트레이더 초기화
+            trader = Trader()
+            
+            # 매매 실행
+            trader.run_trading(max_cycles=args.cycles)
+            
+        elif args.mode == 'backtest':
+            logger.info("백테스트 모드는 아직 구현되지 않았습니다.")
+            send_message("[알림] 백테스트 모드는 아직 구현되지 않았습니다.")
+            
+        elif args.mode == 'analyze':
+            logger.info("종목 분석 모드는 아직 구현되지 않았습니다.")
+            send_message("[알림] 종목 분석 모드는 아직 구현되지 않았습니다.")
+            
+    except KeyboardInterrupt:
+        logger.info("사용자에 의해 프로그램이 중단되었습니다.")
+        send_message("[알림] 사용자에 의해 프로그램이 중단되었습니다.")
         
     except Exception as e:
         logger.error(f"프로그램 실행 중 오류 발생: {e}", exc_info=True)
         send_message(f"[오류] 프로그램 실행 중 오류 발생: {e}")
-        sys.exit(1)
+        
+    finally:
+        # 종료 메시지
+        logger.info("한국 주식 자동매매 시스템 종료")
+        send_message("[시스템 종료] 한국 주식 자동매매 시스템이 종료되었습니다.")
 
 if __name__ == "__main__":
     main() 

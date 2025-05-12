@@ -12,7 +12,8 @@ from typing import Dict, List, Optional, Any, Union
 
 from korea_stock_auto.config import URL_BASE
 from korea_stock_auto.utils.utils import send_message
-from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
+
+
 
 logger = logging.getLogger("stock_auto")
 
@@ -29,7 +30,8 @@ class StockInfoMixin:
         Returns:
             dict or None: 종목 기본 정보
         """
-        self: KoreaInvestmentApiClient  # type hint
+        # type hint 제거
+        # self: KoreaInvestmentApiClient
         
         path = "uapi/domestic-stock/v1/quotations/search-info"
         url = f"{URL_BASE}/{path}"
@@ -93,7 +95,8 @@ class StockInfoMixin:
         Returns:
             list or None: 거래량 상위 종목 목록
         """
-        self: KoreaInvestmentApiClient  # type hint
+        # type hint 제거
+        # self: KoreaInvestmentApiClient
         
         path = "uapi/domestic-stock/v1/quotations/volume-rank"
         url = f"{URL_BASE}/{path}"
@@ -220,7 +223,8 @@ class StockInfoMixin:
         Returns:
             list or None: 거래량 급증 종목 목록
         """
-        self: KoreaInvestmentApiClient  # type hint
+        # type hint 제거
+        # self: KoreaInvestmentApiClient
         
         path = "uapi/domestic-stock/v1/quotations/volume-rank"
         url = f"{URL_BASE}/{path}"
@@ -314,7 +318,8 @@ class StockInfoMixin:
         Notes:
             모의투자 지원 함수입니다.
         """
-        self: KoreaInvestmentApiClient  # type hint
+        # type hint 제거
+        # self: KoreaInvestmentApiClient
         
         path = "uapi/domestic-stock/v1/quotations/inquire-investor"
         url = f"{URL_BASE}/{path}"

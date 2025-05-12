@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Any, Union
 
 from korea_stock_auto.config import URL_BASE
 from korea_stock_auto.utils.utils import send_message
-from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
+
 
 logger = logging.getLogger("stock_auto")
 
@@ -33,7 +33,7 @@ class MarketPriceMixin:
             모의투자 지원 함수입니다.
             내부적으로 get_real_time_price_by_api() 함수를 호출하여 중복 코드를 방지합니다.
         """
-        self: KoreaInvestmentApiClient  # type hint
+        # self: KoreaInvestmentApiClient  # type hint 제거
         
         # get_real_time_price_by_api() 함수를 호출하여 데이터 획득
         real_time_info = self.get_real_time_price_by_api(code)
@@ -89,7 +89,7 @@ class MarketPriceMixin:
         Notes:
             모의투자 지원 함수입니다.
         """
-        self: KoreaInvestmentApiClient  # type hint
+        # self: KoreaInvestmentApiClient  # type hint 제거
         
         path = "uapi/domestic-stock/v1/quotations/inquire-asking-price"
         url = f"{URL_BASE}/{path}"
@@ -222,7 +222,7 @@ class MarketPriceMixin:
         Returns:
             dict or None: 실시간 시세 정보
         """
-        self: KoreaInvestmentApiClient  # type hint
+        # self: KoreaInvestmentApiClient  # type hint 제거
         
         # 이 함수는 WebSocket 연결을 통해 실시간 데이터를 수신하는 것이 이상적입니다.
         # 여기서는 REST API로 현재가와 호가 정보를 함께 가져와 실시간에 가까운 정보를 반환합니다.

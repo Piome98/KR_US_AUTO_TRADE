@@ -24,31 +24,11 @@ from korea_stock_auto.api.auth import (
     is_token_valid, verify_token_status
 )
 
-# 각 기능별 Mixin 클래스 임포트
-from korea_stock_auto.api.api_client.account.balance import AccountBalanceMixin
-from korea_stock_auto.api.api_client.account.deposit import AccountDepositMixin
-from korea_stock_auto.api.api_client.market.stock_info import StockInfoMixin
-from korea_stock_auto.api.api_client.market.price import MarketPriceMixin
-from korea_stock_auto.api.api_client.market.chart import ChartDataMixin
-from korea_stock_auto.api.api_client.order.stock import StockOrderMixin
-from korea_stock_auto.api.api_client.order.status import OrderStatusMixin
-from korea_stock_auto.api.api_client.sector.index import SectorIndexMixin
-from korea_stock_auto.api.api_client.sector.info import SectorInfoMixin
-
 # 로깅 설정
 logger = logging.getLogger("stock_auto")
 
-class KoreaInvestmentApiClient(
-    AccountBalanceMixin,
-    AccountDepositMixin,
-    StockInfoMixin,
-    MarketPriceMixin,
-    ChartDataMixin,
-    StockOrderMixin,
-    OrderStatusMixin,
-    SectorIndexMixin,
-    SectorInfoMixin
-):
+# 클래스 정의를 먼저 하고 나중에 Mixin 클래스들을 적용
+class KoreaInvestmentApiClient:
     """한국투자증권 API 클라이언트"""
     
     def __init__(self):
@@ -136,4 +116,31 @@ class KoreaInvestmentApiClient(
         except Exception as e:
             logger.error(f"{error_msg}: {e}", exc_info=True)
             send_message(f"[오류] {error_msg}: {e}")
-            return None 
+            return None
+
+# 클래스 정의 후에 Mixin 클래스들을 임포트하고 적용
+from korea_stock_auto.api.api_client.account.balance import AccountBalanceMixin
+from korea_stock_auto.api.api_client.account.deposit import AccountDepositMixin
+from korea_stock_auto.api.api_client.market.stock_info import StockInfoMixin
+from korea_stock_auto.api.api_client.market.price import MarketPriceMixin
+from korea_stock_auto.api.api_client.market.chart import ChartDataMixin
+from korea_stock_auto.api.api_client.order.stock import StockOrderMixin
+from korea_stock_auto.api.api_client.order.status import OrderStatusMixin
+from korea_stock_auto.api.api_client.sector.index import SectorIndexMixin
+from korea_stock_auto.api.api_client.sector.info import SectorInfoMixin
+
+# 다중 상속을 통해 Mixin 클래스들의 메서드를 KoreaInvestmentApiClient에 추가
+for mixin in [
+    AccountBalanceMixin, 
+    AccountDepositMixin,
+    StockInfoMixin,
+    MarketPriceMixin,
+    ChartDataMixin,
+    StockOrderMixin,
+    OrderStatusMixin,
+    SectorIndexMixin,
+    SectorInfoMixin
+]:
+    for name, method in mixin.__dict__.items():
+        if not name.startswith('_') and callable(method):
+            setattr(KoreaInvestmentApiClient, name, method) 

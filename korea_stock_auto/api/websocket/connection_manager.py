@@ -1,71 +1,47 @@
 """
-한국 주식 자동매매 - 웹소켓 모듈
-실시간 시세 데이터 수신 처리
+한국 주식 자동매매 - 웹소켓 연결 관리 모듈
+웹소켓 연결 설정 및 유지 관리 기능 제공
 """
 
 import json
 import threading
 import time
-import queue
-import datetime
 import logging
-from typing import List, Dict, Any, Optional, Callable, Set, Union
+from typing import Optional, Dict, Any, Callable, TYPE_CHECKING
 from websocket import WebSocketApp
 
 from korea_stock_auto.config import WS_URL, APP_KEY, APP_SECRET, is_prod_env
-from korea_stock_auto.utils.utils import send_message, rate_limit_wait, retry_on_failure
+from korea_stock_auto.utils.utils import send_message
 from korea_stock_auto.api.auth import request_ws_connection_key
 
 # 로깅 설정
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("stock_auto")
 
-# 실시간 TR 코드
-REAL_TYPE = {
-    "주식체결": "H1_",  # 주식 체결
-    "호가발생": "H2_",  # 호가 발생
-    "주식우선호가": "O23",  # 주식 우선호가 
-    "주식당일거래원": "K1_",  # 주식 당일 거래원
-    "ETF호가": "HB_",  # ETF 호가
-    "ETF체결": "HA_",  # ETF 체결
-    "ETF NAV": "I5",  # ETF NAV
-    "지수": "BM_",  # 지수 (KOSPI, KOSDAQ)
-}
-
-class StockWebSocket:
-    """실시간 주식 시세 웹소켓 클래스"""
+class ConnectionManager:
+    """웹소켓 연결 관리 클래스"""
     
     def __init__(self):
-        """웹소켓 클래스 초기화"""
+        """웹소켓 연결 관리자 초기화"""
         self.ws_conn_key = None
         self.ws = None
-        self.price_queue = queue.Queue()
-        self.symbol_list = []
-        self.target_buy_price = {}
-        self.target_sell_price = {}
-        self.holding_stock = {}
-        self.last_price = {}  # 각 종목별 최근 수신 가격 저장
+        self.ws_connected = False
+        self.running = False
         self.connection_retry_count = 0
         self.max_connection_retries = 10
         self.reconnect_interval = 5  # 초기 재연결 간격 (초)
         self.max_reconnect_interval = 300  # 최대 재연결 간격 (5분)
         self.last_ping_time = 0
         self.ping_interval = 55  # 핑 전송 간격 (초)
-        self.subscribed_symbols = set()  # 구독 중인 종목 목록
-        self.ws_connected = False
         self.connection_lock = threading.Lock()
         self.heartbeat_thread = None
-        self.running = False
+        self.on_message_callback: Optional[Callable[[Dict[str, Any]], None]] = None
         
-    def start(self, symbol_list: Optional[List[str]] = None):
-        """
-        웹소켓 연결 시작
-        
-        Args:
-            symbol_list (list): 실시간 조회할 종목 코드 리스트
-        """
-        if symbol_list:
-            self.symbol_list = symbol_list
-            
+    def set_message_callback(self, callback):
+        """메시지 수신 콜백 설정"""
+        self.on_message_callback = callback
+    
+    def start(self):
+        """웹소켓 연결 시작"""
         self.running = True
         
         # 웹소켓 접속키 발급
@@ -86,11 +62,7 @@ class StockWebSocket:
             self.heartbeat_thread = threading.Thread(target=self._heartbeat_thread, daemon=True)
             self.heartbeat_thread.start()
             logger.info("하트비트 스레드 시작됨")
-        
-        # 종목 구독
-        if self.symbol_list and self.ws_connected:
-            self.subscribe_symbols(self.symbol_list)
-            
+    
     def _connect_websocket(self):
         """웹소켓 연결 설정"""
         with self.connection_lock:
@@ -184,13 +156,6 @@ class StockWebSocket:
             send_message("웹소켓 연결 성공")
             logger.info("웹소켓 연결 성공")
             
-            # 기존에 구독하던 종목이 있으면 재구독
-            if self.subscribed_symbols:
-                symbols_to_resubscribe = list(self.subscribed_symbols)
-                logger.info(f"{len(symbols_to_resubscribe)}개 종목 재구독 시도")
-                time.sleep(1)  # 잠시 대기 후 구독 시도
-                self.subscribe_symbols(symbols_to_resubscribe)
-        
         except Exception as e:
             error_msg = f"웹소켓 연결 설정 중 예외 발생: {e}"
             logger.error(error_msg)
@@ -210,7 +175,6 @@ class StockWebSocket:
             # 로그인 응답 처리
             if "header" in data and "body" in data:
                 header = data["header"]
-                body = data["body"]
                 
                 # 로그인 응답
                 if header.get("tr_id") == "H0STCNT0":
@@ -227,37 +191,15 @@ class StockWebSocket:
                         self.reconnect()
                         return
                         
-                # 실시간 시세 응답
-                elif "real_time" in header:
-                    tr_type = body.get("header", {}).get("tr_id", "")
-                    
-                    # 실시간 체결 데이터
-                    if tr_type.startswith(REAL_TYPE["주식체결"]):
-                        stock_code = body.get("body", {}).get("mksc_shrn_iscd", "")
-                        price = body.get("body", {}).get("stck_prpr", "")
-                        
-                        if stock_code and price:
-                            try:
-                                price_int = int(price)
-                                self.last_price[stock_code] = price_int
-                                
-                                # 큐에 데이터 추가
-                                price_data = {
-                                    "code": stock_code,
-                                    "price": price_int,
-                                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-                                }
-                                self.price_queue.put(price_data)
-                                
-                                # 매수/매도 조건 확인 로직은 별도 스레드에서 처리
-                            except ValueError:
-                                logger.warning(f"가격 변환 실패: {price} (종목코드: {stock_code})")
-                
                 # 핑퐁 처리
                 elif header.get("tr_id") == "PINGPONG":
                     # 클라이언트가 보낸 핑에 대한 서버의 퐁 응답
                     self.last_ping_time = time.time()
                     logger.debug("핑퐁 응답 받음")
+                
+                # 콜백 함수가 설정되어 있으면 메시지 전달
+                if self.on_message_callback:
+                    self.on_message_callback(data)
         
         except json.JSONDecodeError:
             logger.warning("잘못된 JSON 형식의 메시지 수신")
@@ -453,137 +395,25 @@ class StockWebSocket:
                 # 다시 재연결 시도
                 self.reconnect()
     
-    def subscribe_symbols(self, symbols: List[str]):
+    def send_message(self, message: Dict[str, Any]) -> bool:
         """
-        종목 구독 요청
+        웹소켓 메시지 전송
         
         Args:
-            symbols (list): 구독할 종목 코드 목록
+            message: 전송할 메시지
+            
+        Returns:
+            bool: 전송 성공 여부
         """
         if not self.ws_connected:
-            logger.warning("웹소켓 연결이 되어있지 않아 종목 구독을 할 수 없습니다.")
-            send_message("웹소켓 연결이 되어있지 않아 종목 구독을 할 수 없습니다.")
+            logger.warning("웹소켓 연결이 되어있지 않아 메시지를 전송할 수 없습니다.")
             return False
-        
-        if not symbols:
-            logger.warning("구독할 종목 목록이 비어있습니다.")
-            return False
-        
+            
         try:
-            # 실시간 시세 요청
-            tr_type = REAL_TYPE["주식체결"]
-            
-            for symbol in symbols:
-                # 이미 구독 중인 종목은 건너뛰기
-                if symbol in self.subscribed_symbols:
-                    logger.debug(f"이미 구독 중인 종목: {symbol}")
-                    continue
-                
-                # 실시간 요청 전문 생성
-                header = {
-                    "approval_key": self.ws_conn_key,
-                    "custtype": "P",
-                    "tr_type": "1",
-                    "content-type": "utf-8"
-                }
-                
-                body = {
-                    "input": {
-                        "tr_id": tr_type,
-                        "tr_key": symbol
-                    }
-                }
-                
-                # 웹소켓 요청 전송
-                ws_request = {
-                    "header": header,
-                    "body": body
-                }
-                
-                self.ws.send(json.dumps(ws_request))
-                logger.info(f"종목 구독 요청 전송: {symbol}")
-                
-                # 구독 목록에 추가
-                self.subscribed_symbols.add(symbol)
-                
-                # API 호출 제한 방지
-                rate_limit_wait(0.3)
-            
-            subscribe_msg = f"{len(symbols)}개 종목 구독 요청 완료"
-            logger.info(subscribe_msg)
-            send_message(subscribe_msg)
+            self.ws.send(json.dumps(message))
             return True
-            
         except Exception as e:
-            error_msg = f"종목 구독 요청 중 예외 발생: {e}"
-            logger.error(error_msg)
-            send_message(error_msg)
-            return False
-    
-    def unsubscribe_symbols(self, symbols: List[str]):
-        """
-        종목 구독 해지 요청
-        
-        Args:
-            symbols (list): 구독 해지할 종목 코드 목록
-        """
-        if not self.ws_connected:
-            logger.warning("웹소켓 연결이 되어있지 않아 종목 구독 해지를 할 수 없습니다.")
-            return False
-        
-        if not symbols:
-            logger.warning("구독 해지할 종목 목록이 비어있습니다.")
-            return False
-        
-        try:
-            # 실시간 시세 요청
-            tr_type = REAL_TYPE["주식체결"]
-            
-            for symbol in symbols:
-                # 구독 중이지 않은 종목은 건너뛰기
-                if symbol not in self.subscribed_symbols:
-                    logger.debug(f"구독 중이지 않은 종목: {symbol}")
-                    continue
-                
-                # 실시간 요청 전문 생성
-                header = {
-                    "approval_key": self.ws_conn_key,
-                    "custtype": "P",
-                    "tr_type": "2",  # 구독 해지는 tr_type=2
-                    "content-type": "utf-8"
-                }
-                
-                body = {
-                    "input": {
-                        "tr_id": tr_type,
-                        "tr_key": symbol
-                    }
-                }
-                
-                # 웹소켓 요청 전송
-                ws_request = {
-                    "header": header,
-                    "body": body
-                }
-                
-                self.ws.send(json.dumps(ws_request))
-                logger.info(f"종목 구독 해지 요청 전송: {symbol}")
-                
-                # 구독 목록에서 제거
-                self.subscribed_symbols.remove(symbol)
-                
-                # API 호출 제한 방지
-                rate_limit_wait(0.3)
-            
-            unsubscribe_msg = f"{len(symbols)}개 종목 구독 해지 요청 완료"
-            logger.info(unsubscribe_msg)
-            send_message(unsubscribe_msg)
-            return True
-            
-        except Exception as e:
-            error_msg = f"종목 구독 해지 요청 중 예외 발생: {e}"
-            logger.error(error_msg)
-            send_message(error_msg)
+            logger.error(f"메시지 전송 중 예외 발생: {e}")
             return False
     
     def is_connected(self) -> bool:
@@ -595,22 +425,9 @@ class StockWebSocket:
         """
         return self.ws_connected
     
-    def get_subscribed_symbols(self) -> List[str]:
-        """
-        현재 구독 중인 종목 목록 반환
-        
-        Returns:
-            list: 구독 중인 종목 코드 목록
-        """
-        return list(self.subscribed_symbols)
-    
     def stop(self):
         """웹소켓 연결 종료"""
         self.running = False
-        
-        # 구독 중인 종목 해지
-        if self.subscribed_symbols:
-            self.unsubscribe_symbols(list(self.subscribed_symbols))
         
         # 웹소켓 종료
         if self.ws:
