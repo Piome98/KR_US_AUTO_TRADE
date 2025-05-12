@@ -1,33 +1,51 @@
 """
 한국 주식 자동매매 - 데이터베이스 모듈
-주가 데이터 및 거래 내역 저장
+
+주가 데이터 및 거래 내역 저장을 담당하는 모듈입니다.
+주식 가격, 거래 내역, 기술적 지표, 시장 지수 등의 데이터를 관리합니다.
 """
 
 import os
 import json
 import datetime
+import logging
+import sqlite3
 import pandas as pd
+from typing import Dict, List, Optional, Any, Union, Tuple, cast
+
 from korea_stock_auto.utils.utils import send_message
 from korea_stock_auto.utils.db_helper import connect_db, execute_query
 
+# 로깅 설정
+logger = logging.getLogger(__name__)
+
 class StockDatabase:
-    """주식 데이터 및 거래 내역 데이터베이스"""
+    """
+    주식 데이터 및 거래 내역 데이터베이스
     
-    def __init__(self, db_path="stock_data.db"):
+    주가 데이터, 거래 내역, 기술적 지표, 시장 지수 등의 데이터를 저장하고 조회하는 기능을 제공합니다.
+    """
+    
+    def __init__(self, db_path: str = "stock_data.db"):
         """
         데이터베이스 초기화
         
         Args:
-            db_path (str): 데이터베이스 파일 경로
+            db_path: 데이터베이스 파일 경로
         """
         self.db_path = db_path
         self._initialize_db()
     
-    def _initialize_db(self):
-        """데이터베이스 초기화 및 테이블 생성"""
+    def _initialize_db(self) -> None:
+        """
+        데이터베이스 초기화 및 테이블 생성
+        
+        필요한 모든 테이블이 없는 경우 생성합니다.
+        """
         try:
             conn = connect_db(self.db_path)
             if not conn:
+                logger.error("데이터베이스 연결 실패")
                 send_message("데이터베이스 연결 실패")
                 return
             
@@ -157,23 +175,29 @@ class StockDatabase:
             ''')
             
             conn.close()
+            logger.info("데이터베이스 초기화 완료")
             
         except Exception as e:
+            logger.error(f"데이터베이스 초기화 실패: {e}")
             send_message(f"데이터베이스 초기화 실패: {e}")
     
-    def save_price_data(self, code, date, price_data):
+    def save_price_data(self, code: str, date: str, price_data: Dict[str, Any]) -> bool:
         """
         종목 가격 데이터 저장
         
         Args:
-            code (str): 종목 코드
-            date (str): 날짜 (YYYY-MM-DD)
-            price_data (dict): 가격 데이터
+            code: 종목 코드
+            date: 날짜 (YYYY-MM-DD)
+            price_data: 가격 데이터 딕셔너리
+            
+        Returns:
+            저장 성공 여부
         """
         try:
             conn = connect_db(self.db_path)
             if not conn:
-                return
+                logger.error("데이터베이스 연결 실패")
+                return False
                 
             data = (
                 date,
@@ -192,26 +216,35 @@ class StockDatabase:
             ''', data)
             
             conn.close()
+            logger.debug(f"가격 데이터 저장 완료: {code} {date}")
+            return True
             
         except Exception as e:
+            logger.error(f"가격 데이터 저장 실패: {e}")
             send_message(f"가격 데이터 저장 실패: {e}")
+            return False
     
-    def log_transaction(self, code, action, price, quantity, state=None, entry_price=None):
+    def log_transaction(self, code: str, action: str, price: float, quantity: int, 
+                       state: Optional[str] = None, entry_price: Optional[float] = None) -> bool:
         """
         거래 내역 저장
         
         Args:
-            code (str): 종목 코드
-            action (str): 매매 유형 (BUY/SELL)
-            price (float): 거래 가격
-            quantity (int): 거래 수량
-            state (str, optional): 거래 상태
-            entry_price (float, optional): 매수 시 진입 가격 (매도시에만 사용)
+            code: 종목 코드
+            action: 매매 유형 (BUY/SELL)
+            price: 거래 가격
+            quantity: 거래 수량
+            state: 거래 상태
+            entry_price: 매수 시 진입 가격 (매도시에만 사용)
+            
+        Returns:
+            저장 성공 여부
         """
         try:
             conn = connect_db(self.db_path)
             if not conn:
-                return
+                logger.error("데이터베이스 연결 실패")
+                return False
                 
             timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             amount = price * quantity
@@ -240,10 +273,15 @@ class StockDatabase:
             
             conn.close()
             
-            send_message(f"거래 내역 저장: {action} {code} {quantity}주 @ {price}원")
+            log_msg = f"거래 내역 저장: {action} {code} {quantity}주 @ {price}원"
+            logger.info(log_msg)
+            send_message(log_msg)
+            return True
             
         except Exception as e:
+            logger.error(f"거래 내역 저장 실패: {e}")
             send_message(f"거래 내역 저장 실패: {e}")
+            return False
     
     def log_risk_event(self, code, event_type, price, description=""):
         """

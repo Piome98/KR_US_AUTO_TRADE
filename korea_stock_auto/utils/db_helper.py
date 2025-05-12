@@ -1,21 +1,23 @@
 """
 한국 주식 자동매매 - 데이터베이스 도우미 모듈
-데이터베이스 연결 및 쿼리 실행 공통 기능
+
+데이터베이스 연결 및 쿼리 실행 공통 기능을 제공합니다.
 """
 
 import sqlite3
 import pandas as pd
+from typing import Optional, Union, List, Dict, Any, Tuple, cast
 from korea_stock_auto.utils.utils import send_message
 
-def connect_db(db_path):
+def connect_db(db_path: str) -> Optional[sqlite3.Connection]:
     """
     데이터베이스 연결 생성
     
     Args:
-        db_path (str): 데이터베이스 파일 경로
+        db_path: 데이터베이스 파일 경로
         
     Returns:
-        sqlite3.Connection: 연결 객체
+        연결 객체 또는 연결 실패 시 None
     """
     try:
         conn = sqlite3.connect(db_path)
@@ -24,20 +26,27 @@ def connect_db(db_path):
         send_message(f"데이터베이스 연결 실패: {e}")
         return None
 
-def execute_query(conn, query, params=None, fetch=False, fetchall=True, as_df=False):
+def execute_query(
+    conn: sqlite3.Connection, 
+    query: str, 
+    params: Optional[Union[Tuple, Dict[str, Any]]] = None, 
+    fetch: bool = False, 
+    fetchall: bool = True, 
+    as_df: bool = False
+) -> Optional[Union[List[Tuple], Tuple, pd.DataFrame]]:
     """
     SQL 쿼리 실행
     
     Args:
-        conn (sqlite3.Connection): 데이터베이스 연결 객체
-        query (str): 실행할 SQL 쿼리
-        params (tuple or dict, optional): 쿼리 파라미터
-        fetch (bool): 결과를 반환할지 여부
-        fetchall (bool): 모든 결과를 반환할지 여부 (False면 첫 번째 결과만)
-        as_df (bool): 결과를 DataFrame으로 반환할지 여부
+        conn: 데이터베이스 연결 객체
+        query: 실행할 SQL 쿼리
+        params: 쿼리 파라미터 (튜플 또는 딕셔너리)
+        fetch: 결과를 반환할지 여부
+        fetchall: 모든 결과를 반환할지 여부 (False면 첫 번째 결과만)
+        as_df: 결과를 DataFrame으로 반환할지 여부
         
     Returns:
-        list or pandas.DataFrame or None: 쿼리 결과
+        쿼리 결과 (리스트, 튜플, DataFrame) 또는 실패 시 None
     """
     try:
         cursor = conn.cursor()
@@ -64,6 +73,7 @@ def execute_query(conn, query, params=None, fetch=False, fetchall=True, as_df=Fa
         return result
     
     except Exception as e:
-        send_message(f"쿼리 실행 실패: {e}")
+        error_msg = f"쿼리 실행 실패: {e}"
+        send_message(error_msg)
         conn.rollback()
         return None 
