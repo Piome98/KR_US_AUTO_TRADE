@@ -1,44 +1,57 @@
 """
 한국 주식 자동매매 - 시장 가격 조회 모듈
+시장 가격 조회 및 실시간 가격 정보 관련 기능 제공
 """
 
-import requests
 import logging
 import os
-import pandas as pd
 import json
 import datetime
-from typing import Dict, List, Optional, Any, Union
+import requests
+from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING, cast
+from pathlib import Path
 
 from korea_stock_auto.config import URL_BASE
 from korea_stock_auto.utils.utils import send_message
 
+# 타입 힌트만을 위한 조건부 임포트
+if TYPE_CHECKING:
+    from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
 
+# 로깅 설정
 logger = logging.getLogger("stock_auto")
 
 class MarketPriceMixin:
-    """시장 가격 조회 관련 기능 Mixin"""
+    """
+    시장 가격 조회 관련 기능 Mixin
+    
+    주식 현재가, 호가, 체결 정보 등 시장 가격 관련 조회 기능을 제공합니다.
+    """
     
     def fetch_stock_current_price(self, code: str) -> Optional[Dict[str, Any]]:
         """
         주식 현재가 조회
         
+        한국투자증권 API를 통해 특정 종목의 현재가 정보를 조회합니다.
+        
         Args:
-            code (str): 종목 코드
+            code: 종목 코드
             
         Returns:
-            dict or None: 주식 현재가 정보
+            dict or None: 주식 현재가 정보 또는 조회 실패 시 None
             
         Notes:
-            모의투자 지원 함수입니다.
+            모의투자와 실전투자 모두 지원하는 함수입니다.
             내부적으로 get_real_time_price_by_api() 함수를 호출하여 중복 코드를 방지합니다.
         """
-        # self: KoreaInvestmentApiClient  # type hint 제거
+        # type hint를 위한 self 타입 지정
+        self = cast("KoreaInvestmentApiClient", self)
         
         # get_real_time_price_by_api() 함수를 호출하여 데이터 획득
         real_time_info = self.get_real_time_price_by_api(code)
         
         if not real_time_info:
+            logger.error(f"{code} 현재가 조회 실패")
             return None
         
         # 현재가 정보 형식으로 변환하여 반환
@@ -73,46 +86,45 @@ class MarketPriceMixin:
             "gap_from_52week_low": real_time_info.get("gap_from_52week_low", 0)
         }
         
-        logger.info(f"{code} 현재가 조회 성공(간접호출): {price_info['current_price']}원 ({price_info['change_rate']}%)")
+        logger.info(f"{code} 현재가 조회 성공: {price_info['current_price']}원 ({price_info['change_rate']}%)")
         return price_info
     
     def get_stock_asking_price(self, code: str) -> Optional[Dict[str, Any]]:
         """
         주식 현재가 호가 조회
         
+        한국투자증권 API를 통해 특정 종목의 호가 정보를 조회합니다.
+        
         Args:
-            code (str): 종목 코드
+            code: 종목 코드
             
         Returns:
-            dict or None: 주식 호가 정보
+            dict or None: 주식 호가 정보 또는 조회 실패 시 None
             
         Notes:
-            모의투자 지원 함수입니다.
+            모의투자와 실전투자 모두 지원하는 함수입니다.
         """
-        # self: KoreaInvestmentApiClient  # type hint 제거
+        # type hint를 위한 self 타입 지정
+        self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/inquire-asking-price"
         url = f"{URL_BASE}/{path}"
         
         params = {
-            "fid_cond_mrkt_div_code": "J",
-            "fid_input_iscd": code,
+            "fid_cond_mrkt_div_code": "J",  # 시장 구분 코드: J-주식
+            "fid_input_iscd": code,         # 종목 코드
         }
         
-        headers = self._get_headers("FHKST01010200")
-        
         try:
-            # API 호출 속도 제한 적용
-            self._rate_limit()
+            headers = self._get_headers("FHKST01010200")
             
             logger.info(f"{code} 호가 조회 요청")
-            res = requests.get(url, headers=headers, params=params, timeout=10)
-            result = self._handle_response(res, f"{code} 호가 조회 실패")
+            result = self._request_get(url, headers, params, f"{code} 호가 조회 실패")
             
             if not result or result.get("rt_cd") != "0":
                 # API 호출 실패 시 캐시된 데이터 사용
                 logger.warning(f"API를 통한 호가 조회 실패, 캐시된 데이터 확인")
-                cache_file = os.path.join(os.path.dirname(__file__), f'../../../../data/cache/asking_price_{code}.json')
+                cache_file = self._get_cache_path(f'asking_price_{code}.json')
                 if os.path.exists(cache_file):
                     try:
                         with open(cache_file, 'r') as f:
@@ -177,12 +189,11 @@ class MarketPriceMixin:
             
             # 데이터 캐싱
             try:
-                cache_dir = os.path.join(os.path.dirname(__file__), '../../../../data/cache')
-                os.makedirs(cache_dir, exist_ok=True)
-                cache_file = os.path.join(cache_dir, f'asking_price_{code}.json')
+                cache_file = self._get_cache_path(f'asking_price_{code}.json')
+                os.makedirs(os.path.dirname(cache_file), exist_ok=True)
                 with open(cache_file, 'w') as f:
                     json.dump(asking_prices, f)
-                logger.info(f"{code} 호가 데이터 캐싱 완료: {cache_file}")
+                logger.info(f"{code} 호가 데이터 캐싱 완료")
             except Exception as e:
                 logger.error(f"{code} 호가 데이터 캐싱 실패: {e}")
             
@@ -190,12 +201,12 @@ class MarketPriceMixin:
             return asking_prices
             
         except Exception as e:
-            logger.error(f"{code} 호가 조회 실패: {e}", exc_info=True)
+            logger.error(f"{code} 호가 조회 중 예외 발생: {e}", exc_info=True)
             send_message(f"[오류] {code} 호가 조회 실패: {e}")
             
             # 예외 발생 시 캐시된 데이터 사용
             logger.warning(f"API 조회 중 예외 발생, 캐시된 데이터 확인")
-            cache_file = os.path.join(os.path.dirname(__file__), f'../../../../data/cache/asking_price_{code}.json')
+            cache_file = self._get_cache_path(f'asking_price_{code}.json')
             if os.path.exists(cache_file):
                 try:
                     with open(cache_file, 'r') as f:
@@ -203,14 +214,24 @@ class MarketPriceMixin:
                         if cached_data and isinstance(cached_data, dict):
                             cache_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file))
                             current_time = datetime.datetime.now()
-                            # 호가 데이터는 빠르게 변하므로 30분 이내인 경우에만 사용
-                            if (current_time - cache_time).total_seconds() < 1800:
+                            if (current_time - cache_time).total_seconds() < 3600:  # 1시간 이내
                                 logger.info(f"캐시된 호가 데이터 사용 (캐시 시간: {cache_time})")
                                 return cached_data
                 except Exception as e:
                     logger.error(f"캐시 파일 읽기 실패: {e}")
-            
             return None
+    
+    def _get_cache_path(self, filename: str) -> str:
+        """
+        캐시 파일 경로 반환
+        
+        Args:
+            filename: 캐시 파일명
+            
+        Returns:
+            str: 캐시 파일의 전체 경로
+        """
+        return os.path.join(os.path.dirname(__file__), '../../../../data/cache', filename)
     
     def get_real_time_price_by_api(self, code: str) -> Optional[Dict[str, Any]]:
         """
@@ -222,7 +243,8 @@ class MarketPriceMixin:
         Returns:
             dict or None: 실시간 시세 정보
         """
-        # self: KoreaInvestmentApiClient  # type hint 제거
+        # type hint를 위한 self 타입 지정
+        self = cast("KoreaInvestmentApiClient", self)
         
         # 이 함수는 WebSocket 연결을 통해 실시간 데이터를 수신하는 것이 이상적입니다.
         # 여기서는 REST API로 현재가와 호가 정보를 함께 가져와 실시간에 가까운 정보를 반환합니다.

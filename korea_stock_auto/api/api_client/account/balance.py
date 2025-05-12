@@ -1,10 +1,10 @@
 """
 한국 주식 자동매매 - 계좌 잔고 모듈
+계좌 잔고 및 주식 보유 현황 조회 기능 제공
 """
 
-import requests
 import logging
-from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING
+from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING, cast
 
 from korea_stock_auto.config import (
     URL_BASE, CANO, ACNT_PRDT_CD, USE_REALTIME_API
@@ -15,52 +15,56 @@ from korea_stock_auto.utils.utils import send_message
 if TYPE_CHECKING:
     from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
 
+# 로깅 설정
 logger = logging.getLogger("stock_auto")
 
 class AccountBalanceMixin:
-    """계좌 잔고 관련 기능 Mixin"""
+    """
+    계좌 잔고 관련 기능 Mixin
+    
+    계좌 잔고 조회, 주식 보유 현황 조회 등의 기능을 제공합니다.
+    """
     
     def fetch_balance(self) -> Optional[Dict[str, Any]]:
         """
         계좌 잔고 정보 조회
         
+        한국투자증권 API를 통해 계좌 잔고 정보를 조회합니다.
+        
         Returns:
-            dict or None: 계좌 잔고 정보
+            dict or None: 계좌 잔고 정보 또는 조회 실패 시 None
             
         Notes:
-            모의투자 지원 함수입니다.
+            모의투자와 실전투자 모두 지원하는 함수입니다.
         """
-        # type hint
-        self: "KoreaInvestmentApiClient"
+        # type hint를 위한 self 타입 지정
+        self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/trading/inquire-balance"
         url = f"{URL_BASE}/{path}"
         
+        # 실전/모의투자 구분
         tr_id = "TTTC8434R" if USE_REALTIME_API else "VTTC8434R"
         
         params = {
             "CANO": CANO,
             "ACNT_PRDT_CD": ACNT_PRDT_CD,
-            "AFHR_FLPR_YN": "N",
-            "OFL_YN": "N",
-            "INQR_DVSN": "01",
-            "UNPR_DVSN": "01",
-            "FUND_STTL_ICLD_YN": "N",
-            "FNCG_AMT_AUTO_RDPT_YN": "N",
-            "PRCS_DVSN": "01",
-            "CTX_AREA_FK100": "",
-            "CTX_AREA_NK100": ""
+            "AFHR_FLPR_YN": "N",  # 시간외단일가여부
+            "OFL_YN": "N",  # 오프라인여부
+            "INQR_DVSN": "01",  # 조회구분: 01-요약
+            "UNPR_DVSN": "01",  # 단가구분: 01-평균단가
+            "FUND_STTL_ICLD_YN": "N",  # 펀드결제분포함여부
+            "FNCG_AMT_AUTO_RDPT_YN": "N",  # 융자금액자동상환여부
+            "PRCS_DVSN": "01",  # 처리구분: 01-조회
+            "CTX_AREA_FK100": "",  # 연속조회검색조건
+            "CTX_AREA_NK100": ""   # 연속조회키
         }
         
-        headers = self._get_headers(tr_id)
-        
         try:
-            # API 호출 속도 제한 적용
-            self._rate_limit()
+            headers = self._get_headers(tr_id)
             
             logger.info("계좌 잔고 조회 요청")
-            res = requests.get(url, headers=headers, params=params, timeout=10)
-            result = self._handle_response(res, "계좌 잔고 조회 실패")
+            result = self._request_get(url, headers, params, "계좌 잔고 조회 실패")
             
             if result:
                 logger.info("계좌 잔고 조회 성공")
@@ -68,7 +72,7 @@ class AccountBalanceMixin:
             return result
             
         except Exception as e:
-            logger.error(f"계좌 잔고 조회 실패: {e}", exc_info=True)
+            logger.error(f"계좌 잔고 조회 중 예외 발생: {e}", exc_info=True)
             send_message(f"[오류] 계좌 잔고 조회 실패: {e}")
             return None
     
@@ -76,11 +80,16 @@ class AccountBalanceMixin:
         """
         주식 보유 종목 조회
         
+        계좌에 보유 중인 주식 종목 목록과 상세 정보를 조회합니다.
+        
         Returns:
-            dict or None: 주식 보유 정보
+            dict or None: {
+                'account': {계좌 요약 정보},
+                'stocks': [보유 종목 목록]
+            } 또는 조회 실패 시 None
         """
-        # type hint
-        self: "KoreaInvestmentApiClient"
+        # type hint를 위한 self 타입 지정
+        self = cast("KoreaInvestmentApiClient", self)
         
         balance_data = self.fetch_balance()
         
@@ -110,7 +119,7 @@ class AccountBalanceMixin:
             # 보유종목 목록
             stock_list = []
             for stock in output2:
-                if stock.get("pdno") == "":
+                if not stock.get("pdno"):  # 종목코드가 없는 경우 건너뛰기
                     continue
                     
                 stock_data = {
@@ -138,13 +147,15 @@ class AccountBalanceMixin:
             return result
             
         except Exception as e:
-            logger.error(f"주식 보유 종목 처리 실패: {e}", exc_info=True)
+            logger.error(f"주식 보유 종목 처리 중 예외 발생: {e}", exc_info=True)
             send_message(f"[오류] 주식 보유 종목 처리 실패: {e}")
             return None
     
     def get_balance(self) -> Optional[Dict[str, float]]:
         """
-        주식 계좌 잔고 조회 (현금, 주식평가금액, 총평가금액)
+        주식 계좌 잔고 요약 조회
+        
+        계좌의 현금, 주식평가금액, 총평가금액 등 요약 정보를 조회합니다.
         
         Returns:
             dict or None: {
@@ -153,10 +164,10 @@ class AccountBalanceMixin:
                 'total_assets': 총평가금액(원),
                 'total_profit_loss': 총평가손익(원),
                 'total_profit_loss_rate': 총수익률(%)
-            }
+            } 또는 조회 실패 시 None
         """
-        # type hint
-        self: "KoreaInvestmentApiClient"
+        # type hint를 위한 self 타입 지정
+        self = cast("KoreaInvestmentApiClient", self)
         
         balance_data = self.fetch_balance()
         
@@ -182,6 +193,6 @@ class AccountBalanceMixin:
             return result
             
         except Exception as e:
-            logger.error(f"계좌 잔고 정보 처리 실패: {e}", exc_info=True)
+            logger.error(f"계좌 잔고 정보 처리 중 예외 발생: {e}", exc_info=True)
             send_message(f"[오류] 계좌 잔고 정보 처리 실패: {e}")
             return None 
