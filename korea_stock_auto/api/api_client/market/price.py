@@ -4,6 +4,10 @@
 
 import requests
 import logging
+import os
+import pandas as pd
+import json
+import datetime
 from typing import Dict, List, Optional, Any, Union
 
 from korea_stock_auto.config import URL_BASE
@@ -27,76 +31,51 @@ class MarketPriceMixin:
             
         Notes:
             모의투자 지원 함수입니다.
+            내부적으로 get_real_time_price_by_api() 함수를 호출하여 중복 코드를 방지합니다.
         """
         self: KoreaInvestmentApiClient  # type hint
         
-        path = "uapi/domestic-stock/v1/quotations/inquire-price"
-        url = f"{URL_BASE}/{path}"
+        # get_real_time_price_by_api() 함수를 호출하여 데이터 획득
+        real_time_info = self.get_real_time_price_by_api(code)
         
-        params = {
-            "fid_cond_mrkt_div_code": "J",
-            "fid_input_iscd": code,
+        if not real_time_info:
+            return None
+        
+        # 현재가 정보 형식으로 변환하여 반환
+        price_info = {
+            "stock_code": real_time_info.get("stock_code", ""),
+            "stock_name": real_time_info.get("stock_name", ""),
+            "market": real_time_info.get("market", ""),
+            "time": real_time_info.get("time", ""),
+            "current_price": real_time_info.get("current_price", 0),
+            "open_price": real_time_info.get("open_price", 0),
+            "high_price": real_time_info.get("high_price", 0),
+            "low_price": real_time_info.get("low_price", 0),
+            "prev_close_price": real_time_info.get("prev_close_price", 0),
+            "price_change": real_time_info.get("price_change", 0),
+            "change_rate": real_time_info.get("change_rate", 0),
+            "volume": real_time_info.get("volume", 0),
+            "volume_value": real_time_info.get("volume_value", 0),
+            "market_cap": real_time_info.get("market_cap", 0),
+            "listed_shares": real_time_info.get("listed_shares", 0),
+            "highest_52_week": real_time_info.get("highest_52_week", 0),
+            "lowest_52_week": real_time_info.get("lowest_52_week", 0),
+            "per": real_time_info.get("per", 0),
+            "eps": real_time_info.get("eps", 0),
+            "pbr": real_time_info.get("pbr", 0),
+            "div_yield": real_time_info.get("div_yield", 0),
+            "foreign_rate": real_time_info.get("foreign_rate", 0),
+            "day_range_rate": real_time_info.get("day_range_rate", 0),
+            "current_to_open_rate": real_time_info.get("current_to_open_rate", 0),
+            "is_52week_high": real_time_info.get("is_52week_high", False),
+            "is_52week_low": real_time_info.get("is_52week_low", False),
+            "gap_from_52week_high": real_time_info.get("gap_from_52week_high", 0),
+            "gap_from_52week_low": real_time_info.get("gap_from_52week_low", 0)
         }
         
-        headers = self._get_headers("FHKST01010100")
-        
-        try:
-            # API 호출 속도 제한 적용
-            self._rate_limit()
-            
-            logger.info(f"{code} 현재가 조회 요청")
-            res = requests.get(url, headers=headers, params=params, timeout=10)
-            result = self._handle_response(res, f"{code} 현재가 조회 실패")
-            
-            if not result or result.get("rt_cd") != "0":
-                return None
-            
-            output = result.get("output", {})
-            
-            # 주요 정보 추출 및 가공
-            price_info = {
-                "stock_code": code,
-                "stock_name": output.get("prdt_abrv_name", ""),
-                "market": output.get("rprs_mrkt_kor_name", ""),
-                "time": output.get("stck_basc_hour", ""),
-                "current_price": int(output.get("stck_prpr", "0").replace(',', '')),
-                "open_price": int(output.get("stck_oprc", "0").replace(',', '')),
-                "high_price": int(output.get("stck_hgpr", "0").replace(',', '')),
-                "low_price": int(output.get("stck_lwpr", "0").replace(',', '')),
-                "prev_close_price": int(output.get("stck_sdpr", "0").replace(',', '')),
-                "price_change": int(output.get("prdy_vrss", "0").replace(',', '')),
-                "change_rate": float(output.get("prdy_ctrt", "0")),
-                "volume": int(output.get("acml_vol", "0").replace(',', '')),
-                "volume_value": int(output.get("acml_tr_pbmn", "0").replace(',', '')),
-                "market_cap": int(output.get("hts_avls", "0").replace(',', '')),
-                "listed_shares": int(output.get("lstn_stcn", "0").replace(',', '')),
-                "highest_52_week": int(output.get("w52_hgpr", "0").replace(',', '')),
-                "lowest_52_week": int(output.get("w52_lwpr", "0").replace(',', '')),
-                "per": float(output.get("per", "0").replace(',', '')),
-                "eps": float(output.get("eps", "0").replace(',', '')),
-                "pbr": float(output.get("pbr", "0").replace(',', '')),
-                "div_yield": float(output.get("dvr", "0").replace(',', '')),
-                "foreign_rate": float(output.get("frgn_hldn_qty_rt", "0").replace(',', ''))
-            }
-            
-            # 추가 분석 정보
-            price_info["day_range_rate"] = ((price_info["high_price"] - price_info["low_price"]) / price_info["low_price"] * 100) if price_info["low_price"] > 0 else 0
-            price_info["current_to_open_rate"] = ((price_info["current_price"] - price_info["open_price"]) / price_info["open_price"] * 100) if price_info["open_price"] > 0 else 0
-            price_info["is_52week_high"] = price_info["current_price"] >= price_info["highest_52_week"]
-            price_info["is_52week_low"] = price_info["current_price"] <= price_info["lowest_52_week"]
-            
-            # 매매 신호 관련 정보 (단순 분석 목적)
-            price_info["gap_from_52week_high"] = ((price_info["highest_52_week"] - price_info["current_price"]) / price_info["current_price"] * 100) if price_info["current_price"] > 0 else 0
-            price_info["gap_from_52week_low"] = ((price_info["current_price"] - price_info["lowest_52_week"]) / price_info["lowest_52_week"] * 100) if price_info["lowest_52_week"] > 0 else 0
-            
-            logger.info(f"{code} 현재가 조회 성공: {price_info['current_price']}원 ({price_info['change_rate']}%)")
-            return price_info
-            
-        except Exception as e:
-            logger.error(f"{code} 현재가 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] {code} 현재가 조회 실패: {e}")
-            return None
-            
+        logger.info(f"{code} 현재가 조회 성공(간접호출): {price_info['current_price']}원 ({price_info['change_rate']}%)")
+        return price_info
+    
     def get_stock_asking_price(self, code: str) -> Optional[Dict[str, Any]]:
         """
         주식 현재가 호가 조회
@@ -131,6 +110,24 @@ class MarketPriceMixin:
             result = self._handle_response(res, f"{code} 호가 조회 실패")
             
             if not result or result.get("rt_cd") != "0":
+                # API 호출 실패 시 캐시된 데이터 사용
+                logger.warning(f"API를 통한 호가 조회 실패, 캐시된 데이터 확인")
+                cache_file = os.path.join(os.path.dirname(__file__), f'../../../../data/cache/asking_price_{code}.json')
+                if os.path.exists(cache_file):
+                    try:
+                        with open(cache_file, 'r') as f:
+                            cached_data = json.load(f)
+                            if cached_data and isinstance(cached_data, dict):
+                                cache_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file))
+                                current_time = datetime.datetime.now()
+                                # 호가 데이터는 빠르게 변하므로 30분 이내인 경우에만 사용
+                                if (current_time - cache_time).total_seconds() < 1800:
+                                    logger.info(f"캐시된 호가 데이터 사용 (캐시 시간: {cache_time})")
+                                    return cached_data
+                                else:
+                                    logger.warning(f"캐시된 데이터가 오래됨 (캐시 시간: {cache_time})")
+                    except Exception as e:
+                        logger.error(f"캐시 파일 읽기 실패: {e}")
                 return None
                 
             # 매도/매수 호가 정보 추출
@@ -175,88 +172,241 @@ class MarketPriceMixin:
             # 호가 스프레드
             asking_prices["spread"] = asking_prices["highest_ask"] - asking_prices["lowest_bid"]
             
+            # 시장 압력 지표 계산 (매수세/매도세 지표)
+            asking_prices["bid_ask_ratio"] = (sum(asking_prices["bid_quantities"]) / sum(asking_prices["ask_quantities"])) if sum(asking_prices["ask_quantities"]) > 0 else 0
+            
+            # 데이터 캐싱
+            try:
+                cache_dir = os.path.join(os.path.dirname(__file__), '../../../../data/cache')
+                os.makedirs(cache_dir, exist_ok=True)
+                cache_file = os.path.join(cache_dir, f'asking_price_{code}.json')
+                with open(cache_file, 'w') as f:
+                    json.dump(asking_prices, f)
+                logger.info(f"{code} 호가 데이터 캐싱 완료: {cache_file}")
+            except Exception as e:
+                logger.error(f"{code} 호가 데이터 캐싱 실패: {e}")
+            
             logger.info(f"{code} 호가 조회 성공")
             return asking_prices
             
         except Exception as e:
             logger.error(f"{code} 호가 조회 실패: {e}", exc_info=True)
             send_message(f"[오류] {code} 호가 조회 실패: {e}")
+            
+            # 예외 발생 시 캐시된 데이터 사용
+            logger.warning(f"API 조회 중 예외 발생, 캐시된 데이터 확인")
+            cache_file = os.path.join(os.path.dirname(__file__), f'../../../../data/cache/asking_price_{code}.json')
+            if os.path.exists(cache_file):
+                try:
+                    with open(cache_file, 'r') as f:
+                        cached_data = json.load(f)
+                        if cached_data and isinstance(cached_data, dict):
+                            cache_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file))
+                            current_time = datetime.datetime.now()
+                            # 호가 데이터는 빠르게 변하므로 30분 이내인 경우에만 사용
+                            if (current_time - cache_time).total_seconds() < 1800:
+                                logger.info(f"캐시된 호가 데이터 사용 (캐시 시간: {cache_time})")
+                                return cached_data
+                except Exception as e:
+                    logger.error(f"캐시 파일 읽기 실패: {e}")
+            
             return None
     
-    def get_stock_conclusion(self, code: str) -> Optional[Dict[str, Any]]:
+    def get_real_time_price_by_api(self, code: str) -> Optional[Dict[str, Any]]:
         """
-        주식 현재가 체결 정보 조회
+        실시간 시세 조회 API (국내주식 실시간호가 통합 API 사용)
         
         Args:
             code (str): 종목 코드
             
         Returns:
-            dict or None: 주식 체결 정보
-            
-        Notes:
-            모의투자 지원 함수입니다.
+            dict or None: 실시간 시세 정보
         """
         self: KoreaInvestmentApiClient  # type hint
         
-        path = "uapi/domestic-stock/v1/quotations/inquire-ccnl"
-        url = f"{URL_BASE}/{path}"
+        # 이 함수는 WebSocket 연결을 통해 실시간 데이터를 수신하는 것이 이상적입니다.
+        # 여기서는 REST API로 현재가와 호가 정보를 함께 가져와 실시간에 가까운 정보를 반환합니다.
         
-        params = {
-            "fid_cond_mrkt_div_code": "J",
-            "fid_input_iscd": code,
-        }
-        
-        headers = self._get_headers("FHPST01010300")
-        
+        # 현재가 조회 - 직접 API 호출
         try:
             # API 호출 속도 제한 적용
             self._rate_limit()
             
-            logger.info(f"{code} 체결 정보 조회 요청")
-            res = requests.get(url, headers=headers, params=params, timeout=10)
-            result = self._handle_response(res, f"{code} 체결 정보 조회 실패")
+            path = "uapi/domestic-stock/v1/quotations/inquire-price"
+            url = f"{URL_BASE}/{path}"
             
-            if not result or result.get("rt_cd") != "0":
-                return None
-                
-            # 체결 정보 추출
-            output1 = result.get("output1", {})
-            output2 = result.get("output2", [])
-            
-            if not output2:
-                logger.warning(f"{code} 체결 정보가 없습니다.")
-                return {
-                    "stock_code": code,
-                    "stock_name": output1.get("hts_kor_isnm", ""),
-                    "conclusions": []
-                }
-            
-            # 현재가 정보
-            current_info = {
-                "stock_code": code,
-                "stock_name": output1.get("hts_kor_isnm", ""),
-                "current_price": int(output1.get("stck_prpr", "0").replace(',', '')),
-                "price_change": int(output1.get("prdy_vrss", "0").replace(',', '')),
-                "change_rate": float(output1.get("prdy_ctrt", "0").replace(',', '')),
-                "volume": int(output1.get("acml_vol", "0").replace(',', '')),
-                "conclusions": []
+            params = {
+                "fid_cond_mrkt_div_code": "J",
+                "fid_input_iscd": code,
             }
             
-            # 체결 내역 정보 추출
-            for item in output2:
-                conclusion = {
-                    "time": item.get("stck_cntg_hour", ""),
-                    "price": int(item.get("stck_prpr", "0").replace(',', '')),
-                    "quantity": int(item.get("cntg_qty", "0").replace(',', '')),
-                    "change_type": item.get("prdy_vrss_sign", ""),  # 1:상한, 2:상승, 3:보합, 4:하한, 5:하락
-                    "volume": int(item.get("acml_vol", "0").replace(',', '')),
+            headers = self._get_headers("FHKST01010100")
+            
+            logger.info(f"{code} 현재가 조회 요청")
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            price_result = self._handle_response(res, f"{code} 현재가 조회 실패")
+            
+            if not price_result or price_result.get("rt_cd") != "0":
+                # API 호출 실패 시 캐시된 데이터 사용
+                logger.warning(f"API를 통한 현재가 조회 실패, 캐시된 데이터 확인")
+                cache_file = os.path.join(os.path.dirname(__file__), f'../../../../data/cache/price_{code}.json')
+                if os.path.exists(cache_file):
+                    try:
+                        with open(cache_file, 'r') as f:
+                            price_info = json.load(f)
+                            cache_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file))
+                            current_time = datetime.datetime.now()
+                            if (current_time - cache_time).total_seconds() < 3600:
+                                logger.info(f"캐시된 현재가 데이터 사용 (캐시 시간: {cache_time})")
+                            else:
+                                logger.warning(f"캐시된 데이터가 오래됨 (캐시 시간: {cache_time})")
+                    except Exception as e:
+                        logger.error(f"캐시 파일 읽기 실패: {e}")
+                        price_info = None
+                else:
+                    price_info = None
+            else:
+                output = price_result.get("output", {})
+                
+                # 주요 정보 추출 및 가공
+                price_info = {
+                    "stock_code": code,
+                    "stock_name": output.get("prdt_abrv_name", ""),
+                    "market": output.get("rprs_mrkt_kor_name", ""),
+                    "time": output.get("stck_basc_hour", ""),
+                    "current_price": int(output.get("stck_prpr", "0").replace(',', '')),
+                    "open_price": int(output.get("stck_oprc", "0").replace(',', '')),
+                    "high_price": int(output.get("stck_hgpr", "0").replace(',', '')),
+                    "low_price": int(output.get("stck_lwpr", "0").replace(',', '')),
+                    "prev_close_price": int(output.get("stck_sdpr", "0").replace(',', '')),
+                    "price_change": int(output.get("prdy_vrss", "0").replace(',', '')),
+                    "change_rate": float(output.get("prdy_ctrt", "0")),
+                    "volume": int(output.get("acml_vol", "0").replace(',', '')),
+                    "volume_value": int(output.get("acml_tr_pbmn", "0").replace(',', '')),
+                    "market_cap": int(output.get("hts_avls", "0").replace(',', '')),
+                    "listed_shares": int(output.get("lstn_stcn", "0").replace(',', '')),
+                    "highest_52_week": int(output.get("w52_hgpr", "0").replace(',', '')),
+                    "lowest_52_week": int(output.get("w52_lwpr", "0").replace(',', '')),
+                    "per": float(output.get("per", "0").replace(',', '')),
+                    "eps": float(output.get("eps", "0").replace(',', '')),
+                    "pbr": float(output.get("pbr", "0").replace(',', '')),
+                    "div_yield": float(output.get("dvr", "0").replace(',', '')),
+                    "foreign_rate": float(output.get("frgn_hldn_qty_rt", "0").replace(',', '')),
+                    "day_range_rate": ((int(output.get("stck_hgpr", "0").replace(',', '')) - 
+                                        int(output.get("stck_lwpr", "0").replace(',', ''))) / 
+                                       int(output.get("stck_lwpr", "0").replace(',', '')) * 100) 
+                                       if int(output.get("stck_lwpr", "0").replace(',', '')) > 0 else 0,
+                    "current_to_open_rate": ((int(output.get("stck_prpr", "0").replace(',', '')) - 
+                                             int(output.get("stck_oprc", "0").replace(',', ''))) / 
+                                            int(output.get("stck_oprc", "0").replace(',', '')) * 100) 
+                                            if int(output.get("stck_oprc", "0").replace(',', '')) > 0 else 0
                 }
-                current_info["conclusions"].append(conclusion)
+                
+                # 추가 분석 정보
+                price_info["is_52week_high"] = price_info["current_price"] >= price_info["highest_52_week"]
+                price_info["is_52week_low"] = price_info["current_price"] <= price_info["lowest_52_week"]
+                price_info["gap_from_52week_high"] = ((price_info["highest_52_week"] - price_info["current_price"]) / 
+                                                     price_info["current_price"] * 100) if price_info["current_price"] > 0 else 0
+                price_info["gap_from_52week_low"] = ((price_info["current_price"] - price_info["lowest_52_week"]) / 
+                                                   price_info["lowest_52_week"] * 100) if price_info["lowest_52_week"] > 0 else 0
+                
+                # 데이터 캐싱
+                try:
+                    cache_dir = os.path.join(os.path.dirname(__file__), '../../../../data/cache')
+                    os.makedirs(cache_dir, exist_ok=True)
+                    cache_file = os.path.join(cache_dir, f'price_{code}.json')
+                    with open(cache_file, 'w') as f:
+                        json.dump(price_info, f)
+                    logger.info(f"{code} 현재가 데이터 캐싱 완료: {cache_file}")
+                except Exception as e:
+                    logger.error(f"{code} 현재가 데이터 캐싱 실패: {e}")
+                
+                logger.info(f"{code} 현재가 조회 성공: {price_info['current_price']}원 ({price_info['change_rate']}%)")
             
-            logger.info(f"{code} 체결 정보 조회 성공: {len(current_info['conclusions'])}건")
-            return current_info
+            if price_info is None:
+                logger.warning(f"{code} 실시간 시세 조회 실패: 현재가 조회 실패")
+                return None
             
+            # 호가 조회
+            asking_price = self.get_stock_asking_price(code)
+            if asking_price is None:
+                logger.warning(f"{code} 실시간 시세 조회 실패: 호가 조회 실패")
+                # 현재가라도 있으면 반환
+                return price_info
+            
+            # 현재가와 호가 정보 통합
+            real_time_info = {
+                "stock_code": code,
+                "stock_name": price_info.get("stock_name", ""),
+                "current_price": price_info.get("current_price", 0),
+                "change_rate": price_info.get("change_rate", 0),
+                "volume": price_info.get("volume", 0),
+                "time": asking_price.get("time", ""),
+                "bid_ask_ratio": asking_price.get("bid_ask_ratio", 0),
+                "highest_ask": asking_price.get("highest_ask", 0),
+                "lowest_bid": asking_price.get("lowest_bid", 0),
+                "spread": asking_price.get("spread", 0),
+                "total_ask_qty": asking_price.get("total_ask_qty", 0),
+                "total_bid_qty": asking_price.get("total_bid_qty", 0),
+                "asks": asking_price.get("asks", []),
+                "bids": asking_price.get("bids", []),
+                # 추가 정보도 포함
+                "open_price": price_info.get("open_price", 0),
+                "high_price": price_info.get("high_price", 0),
+                "low_price": price_info.get("low_price", 0),
+                "prev_close_price": price_info.get("prev_close_price", 0),
+                "price_change": price_info.get("price_change", 0),
+                "market_cap": price_info.get("market_cap", 0),
+                "per": price_info.get("per", 0),
+                "eps": price_info.get("eps", 0),
+                "pbr": price_info.get("pbr", 0),
+                "div_yield": price_info.get("div_yield", 0),
+                "foreign_rate": price_info.get("foreign_rate", 0),
+                "day_range_rate": price_info.get("day_range_rate", 0),
+                "is_52week_high": price_info.get("is_52week_high", False),
+                "is_52week_low": price_info.get("is_52week_low", False),
+                "highest_52_week": price_info.get("highest_52_week", 0),
+                "lowest_52_week": price_info.get("lowest_52_week", 0),
+                "gap_from_52week_high": price_info.get("gap_from_52week_high", 0),
+                "gap_from_52week_low": price_info.get("gap_from_52week_low", 0)
+            }
+            
+            # 강화학습을 위한 추가 지표
+            real_time_info["market_pressure"] = real_time_info["bid_ask_ratio"] if real_time_info["bid_ask_ratio"] > 0 else 0
+            real_time_info["price_volatility"] = price_info.get("day_range_rate", 0)
+            
+            # 데이터 캐싱
+            try:
+                cache_dir = os.path.join(os.path.dirname(__file__), '../../../../data/cache')
+                os.makedirs(cache_dir, exist_ok=True)
+                cache_file = os.path.join(cache_dir, f'realtime_{code}.json')
+                with open(cache_file, 'w') as f:
+                    json.dump(real_time_info, f)
+                logger.info(f"{code} 실시간 시세 데이터 캐싱 완료: {cache_file}")
+            except Exception as e:
+                logger.error(f"{code} 실시간 시세 데이터 캐싱 실패: {e}")
+            
+            logger.info(f"{code} 실시간 시세 조회 성공: {real_time_info['current_price']}원, 매수/매도비율: {real_time_info['bid_ask_ratio']:.2f}")
+            return real_time_info
+        
         except Exception as e:
-            logger.error(f"{code} 체결 정보 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] {code} 체결 정보 조회 실패: {e}")
+            logger.error(f"{code} 실시간 시세 조회 실패: {e}", exc_info=True)
+            send_message(f"[오류] {code} 실시간 시세 조회 실패: {e}")
+            
+            # 예외 발생 시 캐시된 데이터 사용
+            logger.warning(f"API 조회 중 예외 발생, 캐시된 데이터 확인")
+            cache_file = os.path.join(os.path.dirname(__file__), f'../../../../data/cache/realtime_{code}.json')
+            if os.path.exists(cache_file):
+                try:
+                    with open(cache_file, 'r') as f:
+                        cached_data = json.load(f)
+                        cache_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file))
+                        current_time = datetime.datetime.now()
+                        # 1시간 이내인 경우에만 사용
+                        if (current_time - cache_time).total_seconds() < 3600:
+                            logger.info(f"캐시된 실시간 데이터 사용 (캐시 시간: {cache_time})")
+                            return cached_data
+                except Exception as e:
+                    logger.error(f"캐시 파일 읽기 실패: {e}")
+            
             return None 

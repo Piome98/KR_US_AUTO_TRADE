@@ -11,7 +11,9 @@ import matplotlib.pyplot as plt
 import datetime
 import pickle
 from sklearn.model_selection import train_test_split
-from korea_stock_auto.reinforcement.rl_data.data_processor import DataProcessor
+from korea_stock_auto.reinforcement.rl_data.rl_data_manager import RLDataManager
+from korea_stock_auto.reinforcement.rl_data.technical_indicators import TechnicalIndicatorGenerator
+from korea_stock_auto.reinforcement.rl_data.data_normalizer import DataNormalizer
 from korea_stock_auto.reinforcement.rl_models.rl_model import TradingEnvironment, RLModel, ModelEnsemble
 from korea_stock_auto.reinforcement.rl_models.features import select_features, get_state_dim
 from korea_stock_auto.utils import send_message
@@ -59,17 +61,19 @@ class SaveOnBestTrainingRewardCallback(BaseCallback):
 class ModelTrainer:
     """강화학습 모델 학습 및 평가 클래스"""
     
-    def __init__(self, db_manager=None, data_processor=None, output_dir="models"):
+    def __init__(self, db_manager=None, data_manager=None, output_dir="models"):
         """
         모델 트레이너 초기화
         
         Args:
             db_manager (DatabaseManager): 데이터베이스 관리자
-            data_processor (DataProcessor): 데이터 전처리기
+            data_manager (RLDataManager): 데이터 관리자
             output_dir (str): 출력 디렉토리
         """
         self.db_manager = db_manager or DatabaseManager()
-        self.data_processor = data_processor or DataProcessor()
+        self.data_manager = data_manager or RLDataManager()
+        self.tech_indicator = TechnicalIndicatorGenerator()
+        self.data_normalizer = DataNormalizer()
         self.output_dir = output_dir
         self.cache_dir = os.path.join(os.path.dirname(__file__), '../../../data/cache')
         
@@ -149,7 +153,7 @@ class ModelTrainer:
         
         try:
             # 기술적 지표 추가
-            processed_data = self.data_processor.add_technical_indicators(data)
+            processed_data = self.tech_indicator.add_all_indicators(data)
             
             # 결측값 제거
             processed_data = processed_data.dropna()
@@ -160,8 +164,8 @@ class ModelTrainer:
             test_data = processed_data.iloc[train_size:]
             
             # 학습 데이터로 스케일러 학습 및 변환
-            train_data_scaled = self.data_processor.normalize_data(train_data, fit=True)
-            test_data_scaled = self.data_processor.normalize_data(test_data, fit=False)
+            train_data_scaled = self.data_normalizer.normalize_data(train_data)
+            test_data_scaled = self.data_normalizer.normalize_data(test_data)
             
             return train_data_scaled, test_data_scaled
             
@@ -449,7 +453,7 @@ class ModelTrainer:
             send_message(f"{code} {model_type.upper()} 모델 학습 시작")
             
             # 데이터 준비 (API 데이터 활용)
-            data = self.data_processor.combine_market_data(code)
+            data = self.data_manager.combine_market_data(code)
             
             if data.empty:
                 send_message(f"{code} 데이터가 없습니다.")

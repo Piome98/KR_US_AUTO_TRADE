@@ -6,10 +6,11 @@ import os
 import argparse
 import datetime
 import pandas as pd
+import json
 from korea_stock_auto.utils import send_message
 from korea_stock_auto.data.database import DatabaseManager
 from korea_stock_auto.reinforcement.rl_data.data_fetcher import DataFetcher
-from korea_stock_auto.reinforcement.rl_data.data_processor import DataProcessor
+from korea_stock_auto.reinforcement.rl_data.rl_data_manager import RLDataManager
 from korea_stock_auto.reinforcement.training.trainer import ModelTrainer, create_ensemble_from_best_models
 from korea_stock_auto.reinforcement.rl_models.rl_model import RLModel, ModelEnsemble
 from korea_stock_auto.reinforcement.rl_utils.model_utils import (
@@ -72,13 +73,88 @@ def train_model(args):
         # 데이터베이스 연결
         db_manager = DatabaseManager()
         
-        # 데이터 전처리기 및 트레이너 생성
-        data_processor = DataProcessor()
+        # 데이터 관리자 및 트레이너 생성
+        data_manager = RLDataManager()
         trainer = ModelTrainer(
             db_manager=db_manager, 
-            data_processor=data_processor,
+            data_manager=data_manager,
             output_dir=args.output_dir
         )
+        
+        # 추가: 거래량 상위 종목 및 실시간 시세 데이터 수집 (모델 강화 목적)
+        from korea_stock_auto.api.api_client.market.stock_info import StockInfoMixin
+        from korea_stock_auto.api.api_client.market.price import MarketPriceMixin
+        from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
+        from korea_stock_auto.reinforcement.rl_data.data_fetcher import DataFetcher
+        
+        # 거래량 상위 종목 정보 수집 (관련 종목 분석용)
+        try:
+            send_message(f"거래량 상위 종목 정보 수집 시작")
+            api_client = KoreaInvestmentApiClient()
+            
+            # 일반 거래량 순위
+            top_stocks = api_client.get_top_traded_stocks(market_type="0", top_n=10)
+            
+            # 거래량 급증 종목 정보 (신규)
+            increasing_stocks = api_client.get_volume_increasing_stocks(market_type="0", top_n=10)
+            
+            # 주요 거래 종목 파악 및 관련 정보 출력
+            if top_stocks:
+                send_message(f"현재 거래량 상위 종목: {', '.join([s['name'] for s in top_stocks[:5]])}")
+                
+                # 거래량 상위 종목 관련 추가 데이터 수집 (대상 종목 포함 여부 확인)
+                if args.code in [s['code'] for s in top_stocks]:
+                    index = [s['code'] for s in top_stocks].index(args.code)
+                    send_message(f"{args.code}는 현재 거래량 {index+1}위 종목입니다. 시장 관심도가 높습니다.")
+            
+            # 거래량 급증 종목 정보 출력
+            if increasing_stocks:
+                send_message(f"현재 거래량 급증 종목: {', '.join([s['name'] for s in increasing_stocks[:5]])}")
+                
+                # 거래량 급증 종목에 포함되어 있는지 확인
+                if args.code in [s['code'] for s in increasing_stocks]:
+                    index = [s['code'] for s in increasing_stocks].index(args.code)
+                    ratio = increasing_stocks[index]['volume_ratio']
+                    send_message(f"{args.code}는 현재 거래량 급증 {index+1}위 종목입니다. 증가율: {ratio}%")
+                    
+            # 데이터 캐싱 (시간 기록)
+            cache_dir = os.path.join(os.path.dirname(__file__), '../../data/cache')
+            os.makedirs(cache_dir, exist_ok=True)
+            
+            # 학습 데이터로 활용하기 위한 저장
+            with open(os.path.join(cache_dir, f'volume_rank_data.json'), 'w') as f:
+                json.dump(top_stocks, f)
+            
+            with open(os.path.join(cache_dir, f'volume_increasing_data.json'), 'w') as f:
+                json.dump(increasing_stocks, f)
+                
+        except Exception as e:
+            send_message(f"거래량 상위 종목 정보 수집 실패: {e}")
+        
+        # 추가: 실시간 시세/호가 정보 수집 (학습 데이터 강화)
+        try:
+            # 실시간 통합 시세 정보 수집 (신규)
+            real_time_info = api_client.get_real_time_price_by_api(code=args.code)
+            
+            if real_time_info:
+                current_price = real_time_info.get("current_price", 0)
+                change_rate = real_time_info.get("change_rate", 0)
+                bid_ask_ratio = real_time_info.get("bid_ask_ratio", 0)
+                
+                send_message(f"{args.code} 현재가: {current_price}원 ({change_rate}%), 매수/매도 비율: {bid_ask_ratio:.2f}")
+                
+                # 시장 압력 지표 분석 (매수세/매도세 판단)
+                if bid_ask_ratio > 1.2:  # 매수세가 강한 경우
+                    send_message(f"매수세가 강한 상태입니다. 학습 모델에 이 정보가 반영됩니다.")
+                elif bid_ask_ratio < 0.8:  # 매도세가 강한 경우
+                    send_message(f"매도세가 강한 상태입니다. 학습 모델에 이 정보가 반영됩니다.")
+                
+                # 학습 데이터로 활용하기 위한 저장
+                with open(os.path.join(cache_dir, f'realtime_data_{args.code}.json'), 'w') as f:
+                    json.dump(real_time_info, f)
+                
+        except Exception as e:
+            send_message(f"실시간 시세 정보 수집 실패: {e}")
         
         # 학습 파이프라인 실행
         model_id, results = trainer.run_training_pipeline(
@@ -131,7 +207,7 @@ def test_model(args):
             return
         
         # 데이터 전처리
-        processor = DataProcessor()
+        processor = RLDataManager()
         processed_data = processor.add_technical_indicators(data)
         processed_data = processor.normalize_data(processed_data)
         
@@ -243,7 +319,7 @@ def backtest(args):
             return
         
         # 데이터 전처리
-        processor = DataProcessor()
+        processor = RLDataManager()
         processed_data = processor.add_technical_indicators(data)
         processed_data = processor.normalize_data(processed_data)
         
@@ -366,7 +442,7 @@ def compare_model_performance(args):
             return
         
         # 데이터 전처리
-        processor = DataProcessor()
+        processor = RLDataManager()
         processed_data = processor.add_technical_indicators(data)
         processed_data = processor.normalize_data(processed_data)
         
