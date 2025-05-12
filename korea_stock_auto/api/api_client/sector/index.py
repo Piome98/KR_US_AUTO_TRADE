@@ -1,36 +1,57 @@
 """
 한국 주식 자동매매 - 업종 지수 모듈
+
+코스피, 코스닥 등 주요 지수 및 업종별 지수 조회 기능을 제공합니다.
 """
 
 import requests
 import logging
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, TYPE_CHECKING, cast
 from datetime import datetime
 
 from korea_stock_auto.config import URL_BASE
 from korea_stock_auto.utils.utils import send_message
-from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
 
+# 타입 힌트만을 위한 조건부 임포트
+if TYPE_CHECKING:
+    from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
+
+# 로깅 설정
 logger = logging.getLogger("stock_auto")
 
 class SectorIndexMixin:
-    """업종 지수 관련 기능 Mixin"""
+    """
+    업종 지수 관련 기능 Mixin
+    
+    주요 지수 조회 및 업종별 지수 조회 기능을 제공합니다.
+    """
     
     def get_market_index(self, index_code: str = "0001") -> Optional[Dict[str, Any]]:
         """
         주요 지수 조회 (코스피, 코스닥 등)
         
         Args:
-            index_code (str): 지수 코드
+            index_code: 지수 코드
                 - 0001: 코스피
                 - 1001: 코스닥
                 - 2001: 코스피200
+                - 0028: 코스피 건설업
+                - 0034: 코스피 금융업
+                - 0035: 코스피 보험업
+                - 0150: 코스피 운수창고업
+                - 0037: 코스피 전기전자
+                - 0009: 코스피 의약품
                 - 그 외 각종 섹터 인덱스 코드 사용 가능
                 
         Returns:
-            dict or None: 지수 정보
+            dict or None: 지수 정보 (실패 시 None)
+            
+        Examples:
+            >>> api_client.get_market_index("0001")  # 코스피 지수 조회
+            >>> api_client.get_market_index("1001")  # 코스닥 지수 조회
         """
-        self: KoreaInvestmentApiClient  # type hint
+        # type hint를 위한 self 타입 지정
+        self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/inquire-index"
         url = f"{URL_BASE}/{path}"
@@ -108,16 +129,20 @@ class SectorIndexMixin:
         주요 지수 일별 시세 조회
         
         Args:
-            index_code (str): 지수 코드
+            index_code: 지수 코드
                 - 0001: 코스피
                 - 1001: 코스닥
                 - 2001: 코스피200
-            period (int): 조회 기간(일)
+            period: 조회 기간(일)
                 
         Returns:
-            list or None: 일별 지수 정보 목록
+            list or None: 일별 지수 정보 목록 (실패 시 None)
+            
+        Examples:
+            >>> api_client.get_index_chart_daily("0001", 10)  # 코스피 지수 10일치 일별 시세 조회
         """
-        self: KoreaInvestmentApiClient  # type hint
+        # type hint를 위한 self 타입 지정
+        self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/inquire-index-daily-price"
         url = f"{URL_BASE}/{path}"
@@ -186,10 +211,16 @@ class SectorIndexMixin:
         """
         주요 지수 시장 상황 종합 조회
         
+        코스피, 코스닥, 코스피200 지수를 한 번에 조회하여 시장 상황을 종합적으로 파악합니다.
+        
         Returns:
             dict: 시장 상황 종합 정보
+            
+        Examples:
+            >>> api_client.get_market_status()  # 주요 지수 시장 상황 종합 조회
         """
-        self: KoreaInvestmentApiClient  # type hint
+        # type hint를 위한 self 타입 지정
+        self = cast("KoreaInvestmentApiClient", self)
         
         # 주요 지수 조회
         kospi = self.get_market_index("0001")
@@ -198,33 +229,12 @@ class SectorIndexMixin:
         
         # 결과 가공
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
         market_status = {
             "timestamp": now,
             "kospi": kospi,
             "kosdaq": kosdaq,
-            "kospi200": kospi200,
-            "summary": {
-                "kospi_status": kospi.get("status") if kospi else "조회실패",
-                "kosdaq_status": kosdaq.get("status") if kosdaq else "조회실패",
-                "market_trend": "상승" if (kospi and kosdaq and kospi.get("change", 0) > 0 and kosdaq.get("change", 0) > 0) else 
-                               "하락" if (kospi and kosdaq and kospi.get("change", 0) < 0 and kosdaq.get("change", 0) < 0) else 
-                               "혼조세"
-            }
+            "kospi200": kospi200
         }
         
-        # 시장 분위기 평가
-        if market_status["summary"]["market_trend"] == "상승":
-            if kospi and kosdaq and kospi.get("change_rate", 0) > 1.0 and kosdaq.get("change_rate", 0) > 1.5:
-                market_status["summary"]["market_mood"] = "강세"
-            else:
-                market_status["summary"]["market_mood"] = "상승"
-        elif market_status["summary"]["market_trend"] == "하락":
-            if kospi and kosdaq and kospi.get("change_rate", 0) < -1.0 and kosdaq.get("change_rate", 0) < -1.5:
-                market_status["summary"]["market_mood"] = "급락"
-            else:
-                market_status["summary"]["market_mood"] = "약세"
-        else:
-            market_status["summary"]["market_mood"] = "혼조세"
-        
-        logger.info(f"시장 상황 종합 조회 성공: {market_status['summary']['market_mood']}")
         return market_status 
