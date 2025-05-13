@@ -1,6 +1,8 @@
 """
-한국 주식 자동매매 - 강화학습 데이터 관리 모듈
+한국 주식 자동매매 - 강화학습 데이터 관리 모듈 (리팩토링 버전)
+
 다른 데이터 처리 모듈들을 통합하여 강화학습을 위한 데이터 파이프라인 관리
+data/database 모듈을 활용하여 데이터 접근
 """
 
 import os
@@ -17,26 +19,39 @@ from .data_normalizer import DataNormalizer
 from .sequence_generator import SequenceGenerator
 from .market_data_integrator import MarketDataIntegrator
 
+from korea_stock_auto.data.database import (
+    PriceDataManager, 
+    TechnicalDataManager, 
+    MarketDataManager
+)
+
 logger = logging.getLogger("stock_auto")
 
 class RLDataManager:
     """강화학습 데이터 파이프라인 관리 클래스"""
     
-    def __init__(self, cache_dir=None, lookback=20, feature_columns=None):
+    def __init__(self, db_path: str = "stock_data.db", cache_dir=None, lookback=20, feature_columns=None):
         """
         강화학습 데이터 관리자 초기화
         
         Args:
-            cache_dir (str): 캐시 디렉토리 경로
-            lookback (int): 학습에 사용할 과거 데이터 길이
-            feature_columns (list): 사용할 특성 컬럼 리스트
+            db_path: 데이터베이스 파일 경로
+            cache_dir: 캐시 디렉토리 경로
+            lookback: 학습에 사용할 과거 데이터 길이
+            feature_columns: 사용할 특성 컬럼 리스트
         """
+        self.db_path = db_path
         self.cache_dir = cache_dir or os.path.join(os.path.dirname(__file__), '../../../data/cache')
         os.makedirs(self.cache_dir, exist_ok=True)
         
-        # 하위 모듈 초기화
+        # data/database 모듈 초기화
+        self.price_manager = PriceDataManager(db_path)
+        self.tech_manager = TechnicalDataManager(db_path)
+        self.market_manager = MarketDataManager(db_path)
+        
+        # 강화학습 특화 모듈 초기화
         self.preprocessor = DataPreprocessor(cache_dir=self.cache_dir)
-        self.tech_indicator = TechnicalIndicatorGenerator()
+        self.tech_indicator = TechnicalIndicatorGenerator(db_path=db_path)
         self.normalizer = DataNormalizer()
         self.sequence_generator = SequenceGenerator(lookback=lookback, feature_columns=feature_columns)
         self.market_integrator = MarketDataIntegrator(cache_dir=self.cache_dir)
@@ -46,21 +61,21 @@ class RLDataManager:
         API에서 가져온 데이터를 강화학습에 사용할 수 있도록 준비
         
         Args:
-            code (str): 종목 코드
-            lookback_days (int): 과거 데이터 확인 일수
+            code: 종목 코드
+            lookback_days: 과거 데이터 확인 일수
             
         Returns:
             pd.DataFrame: 강화학습용으로 처리된 데이터프레임
         """
         try:
-            # 1. 주가 데이터 로드
-            df = self.preprocessor.load_stock_data(code, days=lookback_days)
+            # 1. 데이터베이스에서 주가 데이터 로드
+            df = self.price_manager.get_price_history(code, days=lookback_days)
             
             if df.empty:
                 logger.warning(f"{code} 주가 데이터가 없습니다.")
                 return pd.DataFrame()
             
-            # 2. 실시간 데이터 로드 및 통합
+            # 2. 실시간 데이터 로드 및 통합 (기존 코드 유지)
             realtime_data = self.preprocessor.load_realtime_data(code)
             if realtime_data:
                 df = self.preprocessor.merge_with_realtime(df, realtime_data, code)
@@ -68,14 +83,14 @@ class RLDataManager:
             # 3. 데이터 정제
             df = self.preprocessor.clean_data(df)
             
-            # 4. 기술적 지표 추가
-            df = self.tech_indicator.add_all_indicators(df)
+            # 4. 기술적 지표 추가 (데이터베이스 우선 활용)
+            df = self.tech_indicator.add_all_indicators(df, use_db_first=True, code=code)
             
             # 5. 데이터 정규화
             df = self.normalizer.normalize_data(df)
             
-            # 6. 시장 데이터 통합
-            df = self.market_integrator.combine_market_data(df, code)
+            # 6. 시장 데이터 통합 (데이터베이스 활용)
+            df = self._integrate_market_data(df, code, lookback_days)
             
             # 7. 강화학습용 데이터 저장
             self.preprocessor.save_processed_data(df, code, suffix='rl_processed')
@@ -87,12 +102,106 @@ class RLDataManager:
             logger.error(f"강화학습용 데이터 준비 실패: {e}", exc_info=True)
             return pd.DataFrame()
     
+    def _integrate_market_data(self, df: pd.DataFrame, code: str, days: int = 30) -> pd.DataFrame:
+        """
+        시장 데이터 통합 (데이터베이스 활용)
+        
+        Args:
+            df: 원본 데이터프레임
+            code: 종목 코드
+            days: 조회 기간(일)
+            
+        Returns:
+            pd.DataFrame: 시장 데이터가 통합된 데이터프레임
+        """
+        try:
+            # 데이터베이스에서 시장 지수 데이터 조회
+            kospi_data = self.market_manager.get_market_index_history('KOSPI', days)
+            kosdaq_data = self.market_manager.get_market_index_history('KOSDAQ', days)
+            
+            if kospi_data.empty and kosdaq_data.empty:
+                # 데이터베이스에 시장 데이터가 없는 경우 기존 통합 방식 사용
+                logger.info(f"데이터베이스에 시장 데이터가 없어 기존 통합 방식 사용")
+                return self.market_integrator.combine_market_data(df, code)
+            
+            # 날짜 형식 통일
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'])
+            
+            # KOSPI 데이터 통합
+            if not kospi_data.empty:
+                kospi_data['date'] = pd.to_datetime(kospi_data['date'])
+                kospi_data = kospi_data.rename(columns={
+                    'close': 'kospi_close',
+                    'volume': 'kospi_volume',
+                    'change_percent': 'kospi_change'
+                })
+                
+                df = pd.merge(
+                    df,
+                    kospi_data[['date', 'kospi_close', 'kospi_volume', 'kospi_change']],
+                    on='date',
+                    how='left'
+                )
+            
+            # KOSDAQ 데이터 통합
+            if not kosdaq_data.empty:
+                kosdaq_data['date'] = pd.to_datetime(kosdaq_data['date'])
+                kosdaq_data = kosdaq_data.rename(columns={
+                    'close': 'kosdaq_close',
+                    'volume': 'kosdaq_volume',
+                    'change_percent': 'kosdaq_change'
+                })
+                
+                df = pd.merge(
+                    df,
+                    kosdaq_data[['date', 'kosdaq_close', 'kosdaq_volume', 'kosdaq_change']],
+                    on='date',
+                    how='left'
+                )
+            
+            # 상관관계 데이터 추가 (기존 코드를 일부 유지)
+            if not df.empty and 'close' in df.columns:
+                # 주가와 지수 간 상관관계
+                if 'kospi_close' in df.columns:
+                    df['kospi_corr'] = self._calculate_rolling_correlation(df['close'], df['kospi_close'])
+                
+                if 'kosdaq_close' in df.columns:
+                    df['kosdaq_corr'] = self._calculate_rolling_correlation(df['close'], df['kosdaq_close'])
+            
+            # NaN 값 처리
+            df = df.fillna(method='ffill')
+            df = df.fillna(method='bfill')
+            df = df.fillna(0)
+            
+            logger.info(f"시장 데이터 통합 완료 (데이터베이스 활용)")
+            return df
+            
+        except Exception as e:
+            logger.error(f"시장 데이터 통합 실패: {e}", exc_info=True)
+            # 실패 시 기존 통합 방식 사용
+            return self.market_integrator.combine_market_data(df, code)
+    
+    def _calculate_rolling_correlation(self, series1: pd.Series, series2: pd.Series, window: int = 20) -> pd.Series:
+        """
+        두 시계열 간의 이동 상관계수 계산
+        
+        Args:
+            series1: 첫 번째 시계열
+            series2: 두 번째 시계열
+            window: 윈도우 크기
+            
+        Returns:
+            pd.Series: 상관계수 시리즈
+        """
+        return series1.rolling(window=window).corr(series2)
+    
     def create_training_dataset(self, code: str) -> Dict[str, np.ndarray]:
         """
         강화학습 모델 훈련을 위한 데이터셋 생성
         
         Args:
-            code (str): 종목 코드
+            code: 종목 코드
             
         Returns:
             dict: 강화학습 훈련 데이터셋
@@ -158,7 +267,7 @@ class RLDataManager:
         현재 상태 벡터 생성
         
         Args:
-            code (str): 종목 코드
+            code: 종목 코드
             
         Returns:
             numpy.ndarray: 현재 상태 벡터
@@ -195,7 +304,7 @@ class RLDataManager:
         여러 종목의 데이터셋 일괄 업데이트
         
         Args:
-            codes (list): 종목 코드 리스트
+            codes: 종목 코드 리스트
             
         Returns:
             bool: 성공 여부

@@ -1,6 +1,8 @@
 """
-한국 주식 자동매매 - 기술적 지표 생성 모듈
+한국 주식 자동매매 - 기술적 지표 생성 모듈 (리팩토링 버전)
+
 강화학습 모델을 위한 기술적 지표 계산 기능
+database.technical_data 모듈과 연동하여 기존 저장된 지표 활용 및 추가 지표 계산
 """
 
 import pandas as pd
@@ -9,13 +11,20 @@ import talib
 import logging
 from typing import Optional, List, Dict, Any, Union
 
+from korea_stock_auto.data.database import TechnicalDataManager
+
 logger = logging.getLogger("stock_auto")
 
 class TechnicalIndicatorGenerator:
     """기술적 지표 생성 클래스"""
     
-    def __init__(self):
-        """초기화"""
+    def __init__(self, db_path: str = "stock_data.db"):
+        """
+        초기화
+        
+        Args:
+            db_path: 데이터베이스 파일 경로
+        """
         # 기본 기술적 지표 컬럼 정의
         self.all_indicators = [
             'sma5', 'sma10', 'sma20', 'sma60', 'sma120',
@@ -25,18 +34,118 @@ class TechnicalIndicatorGenerator:
             'daily_return', 'volatility',
             'volume_ma5', 'volume_ma20', 'volume_ratio', 'obv'
         ]
+        
+        # 데이터베이스 연동을 위한 기술적 지표 매니저
+        self.tech_manager = TechnicalDataManager(db_path)
     
-    def add_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+    def get_indicators_from_database(self, code: str, days: int = 30) -> pd.DataFrame:
+        """
+        데이터베이스에서 기술적 지표 가져오기
+        
+        Args:
+            code: 종목 코드
+            days: 조회 기간(일)
+            
+        Returns:
+            pd.DataFrame: 기술적 지표 데이터프레임
+        """
+        try:
+            # 데이터베이스에서 저장된 기술적 지표 조회
+            indicators_df = self.tech_manager.get_technical_indicators(code, days)
+            
+            if indicators_df.empty:
+                logger.warning(f"{code} 기술적 지표 데이터가 데이터베이스에 없습니다.")
+                return pd.DataFrame()
+            
+            logger.info(f"{code} 기술적 지표 데이터 조회 성공: {len(indicators_df)} 행")
+            return indicators_df
+            
+        except Exception as e:
+            logger.error(f"기술적 지표 데이터 조회 실패: {e}", exc_info=True)
+            return pd.DataFrame()
+    
+    def add_all_indicators(self, df: pd.DataFrame, use_db_first: bool = True, code: str = None) -> pd.DataFrame:
         """
         모든 기술적 지표 추가
         
         Args:
-            df (pd.DataFrame): 원본 데이터프레임
+            df: 원본 데이터프레임
+            use_db_first: 데이터베이스 데이터 우선 활용 여부
+            code: 종목 코드 (use_db_first=True인 경우 필요)
             
         Returns:
             pd.DataFrame: 기술적 지표가 추가된 데이터프레임
         """
         # 원본 데이터 복사
+        df_processed = df.copy()
+        
+        try:
+            # 데이터베이스 우선 활용 옵션이 켜져있고 종목 코드가 제공된 경우
+            if use_db_first and code:
+                # 데이터베이스에서 기술적 지표 조회
+                db_indicators = self.get_indicators_from_database(code, len(df))
+                
+                # 데이터베이스에 지표가 있는 경우, 해당 데이터 활용
+                if not db_indicators.empty:
+                    # 날짜 기준 병합
+                    if 'date' in df_processed.columns and 'date' in db_indicators.columns:
+                        # 날짜 형식 통일
+                        df_processed['date'] = pd.to_datetime(df_processed['date'])
+                        db_indicators['date'] = pd.to_datetime(db_indicators['date'])
+                        
+                        # 데이터 병합
+                        df_merged = pd.merge(
+                            df_processed,
+                            db_indicators.drop(['code'], axis=1, errors='ignore'),
+                            on='date',
+                            how='left'
+                        )
+                        
+                        # 병합 후 NaN 값이 있는 경우에만 직접 계산
+                        missing_indicators = [col for col in self.all_indicators 
+                                            if col in db_indicators.columns and df_merged[col].isna().any()]
+                        
+                        if missing_indicators:
+                            logger.info(f"일부 누락된 지표 직접 계산: {missing_indicators}")
+                            # 누락된 행에 대해서만 지표 계산
+                            df_with_missing = df_processed[df_processed['date'].isin(
+                                df_merged[df_merged[missing_indicators[0]].isna()]['date']
+                            )]
+                            
+                            if not df_with_missing.empty:
+                                df_calculated = self._calculate_indicators(df_with_missing)
+                                
+                                # 계산된 값으로 누락된 부분 채우기
+                                for date in df_calculated['date'].unique():
+                                    mask = df_merged['date'] == date
+                                    calc_mask = df_calculated['date'] == date
+                                    
+                                    for indicator in missing_indicators:
+                                        if indicator in df_calculated.columns:
+                                            df_merged.loc[mask, indicator] = df_calculated.loc[calc_mask, indicator].values[0]
+                            
+                            return df_merged
+                        
+                        logger.info(f"데이터베이스 기술적 지표 활용 완료")
+                        return df_merged
+            
+            # 데이터베이스 활용 불가 또는 옵션 꺼짐 - 직접 계산
+            return self._calculate_indicators(df_processed)
+            
+        except Exception as e:
+            logger.error(f"기술적 지표 추가 실패: {e}", exc_info=True)
+            return df_processed
+    
+    def _calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        모든 기술적 지표 직접 계산
+        
+        Args:
+            df: 원본 데이터프레임
+            
+        Returns:
+            pd.DataFrame: 기술적 지표가 추가된 데이터프레임
+        """
         df_processed = df.copy()
         
         # 필요한 컬럼 확인
@@ -69,11 +178,11 @@ class TechnicalIndicatorGenerator:
             df_processed = df_processed.fillna(method='bfill')
             df_processed = df_processed.fillna(0)
             
-            logger.info(f"기술적 지표 {len(df_processed.columns) - len(df.columns)}개 추가 완료")
+            logger.info(f"기술적 지표 직접 계산 완료: {len(df_processed.columns) - len(df.columns)}개 지표")
             return df_processed
             
         except Exception as e:
-            logger.error(f"기술적 지표 추가 실패: {e}", exc_info=True)
+            logger.error(f"기술적 지표 계산 실패: {e}", exc_info=True)
             return df_processed
     
     def add_moving_averages(self, df: pd.DataFrame) -> pd.DataFrame:

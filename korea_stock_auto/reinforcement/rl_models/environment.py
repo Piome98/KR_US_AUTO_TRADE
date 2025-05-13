@@ -1,22 +1,18 @@
 """
-강화학습 모델 및 학습 환경 모듈
+한국 주식 자동매매 - 강화학습 환경 모듈
+
+주식 거래를 위한 OpenAI Gym 기반 강화학습 환경 제공
 """
 
 import os
-import pickle
 import numpy as np
-import datetime
 import pandas as pd
 import gym
 from gym import spaces
-from stable_baselines3 import PPO, A2C, DQN
-from stable_baselines3.common.vec_env import DummyVecEnv
-from korea_stock_auto.utils import send_message
-from typing import List, Dict, Any, Optional, Tuple, Union, Callable
+from typing import List, Dict, Any, Optional, Tuple, Union
 import logging
 
 logger = logging.getLogger("stock_auto")
-
 
 class TradingEnvironment(gym.Env):
     """
@@ -29,7 +25,8 @@ class TradingEnvironment(gym.Env):
         initial_balance: float = 10000000, 
         commission: float = 0.00015, 
         window_size: int = 20,
-        reward_scaling: float = 0.01
+        reward_scaling: float = 0.01,
+        holding_penalty: float = 0.0001
     ):
         """
         초기화
@@ -40,6 +37,7 @@ class TradingEnvironment(gym.Env):
             commission (float): 거래 수수료
             window_size (int): 관찰 창 크기
             reward_scaling (float): 보상 스케일링 계수
+            holding_penalty (float): 주식 보유 페널티
         """
         super(TradingEnvironment, self).__init__()
         
@@ -50,6 +48,7 @@ class TradingEnvironment(gym.Env):
         self.commission = commission
         self.window_size = window_size
         self.reward_scaling = reward_scaling
+        self.holding_penalty = holding_penalty
         
         # 현재 위치 및 보유 주식
         self.current_step = 0
@@ -202,6 +201,10 @@ class TradingEnvironment(gym.Env):
         if action == 0 and self.previous_portfolio_value > 0:
             value_change_rate = (current_portfolio_value - self.previous_portfolio_value) / self.previous_portfolio_value
             reward += value_change_rate * self.reward_scaling
+            
+            # 주식 보유 시 홀딩 패널티 적용 (장기 보유 억제)
+            if self.shares_held > 0:
+                reward -= self.holding_penalty
         
         # 다음 단계 포트폴리오 가치 비교를 위해 현재 가치 저장
         self.previous_portfolio_value = current_portfolio_value
@@ -255,175 +258,41 @@ class TradingEnvironment(gym.Env):
         Returns:
             np.ndarray: 관찰 벡터
         """
-        # 특성 컬럼 가져오기
-        feature_columns = self._get_feature_columns()
-        
         # 가격 특성 추출
-        price_features = self.df.loc[self.current_step, feature_columns].values
+        features = self._get_feature_columns()
+        price_features = self.df.loc[self.current_step, features].values
         
-        # 포트폴리오 특성 계산
-        # 1. 보유 주식 비율 (0~1 사이)
+        # 포트폴리오 상태 특성 계산
         portfolio_value = self._calculate_portfolio_value()
-        shares_value = self.shares_held * self.current_price
-        shares_ratio = min(1.0, shares_value / portfolio_value) if portfolio_value > 0 else 0
         
-        # 2. 현재 손익률 (-1~1 사이)
-        if self.shares_held > 0 and self.avg_buy_price > 0:
+        # 1. 보유 비율: 현재 보유 주식 가치 / 포트폴리오 가치
+        if portfolio_value > 0:
+            holdings_ratio = (self.shares_held * self.current_price) / portfolio_value
+        else:
+            holdings_ratio = 0
+            
+        # 2. 현재 수익률: (현재가 - 평균매수가) / 평균매수가
+        if self.avg_buy_price > 0 and self.shares_held > 0:
             profit_ratio = (self.current_price - self.avg_buy_price) / self.avg_buy_price
-            profit_ratio = np.clip(profit_ratio, -1, 1)  # -100% ~ +100%로 클리핑
         else:
             profit_ratio = 0
+            
+        # 3. 현금 비율: 현재 현금 / 초기 자본
+        cash_ratio = self.balance / self.initial_balance
         
-        # 3. 현금 비율 (0~1 사이)
-        cash_ratio = min(1.0, self.balance / portfolio_value) if portfolio_value > 0 else 1
+        # 최종 관찰 벡터 (가격 특성 + 포트폴리오 특성)
+        portfolio_features = np.array([holdings_ratio, profit_ratio, cash_ratio])
         
-        # 모든 특성 결합
-        portfolio_features = np.array([shares_ratio, profit_ratio, cash_ratio], dtype=np.float32)
-        observation = np.concatenate([price_features, portfolio_features])
-        
-        return observation
+        return np.concatenate([price_features, portfolio_features]).astype(np.float32)
     
     def render(self, mode='human'):
         """
-        환경 시각화 (미구현)
-        """
-        pass
-
-
-class RLModel:
-    """강화학습 모델 래퍼"""
-    
-    def __init__(self, sb3_model, model_type: str = "ppo"):
-        """
-        초기화
+        환경 시각화 (현재는 간단한 콘솔 출력)
         
         Args:
-            sb3_model: Stable Baselines3 모델
-            model_type (str): 모델 유형 (ppo, a2c, dqn)
+            mode (str): 렌더링 모드
         """
-        self.sb3_model = sb3_model
-        self.model_type = model_type.lower()
-    
-    def predict(self, observation: np.ndarray, deterministic: bool = True) -> Tuple[int, np.ndarray]:
-        """
-        행동 예측
-        
-        Args:
-            observation (np.ndarray): 관찰 벡터
-            deterministic (bool): 결정론적 예측 여부
-            
-        Returns:
-            tuple: (행동, 상태 값)
-        """
-        action, state = self.sb3_model.predict(observation, deterministic=deterministic)
-        return action, state
-    
-    def save(self, path: str) -> None:
-        """
-        모델 저장
-        
-        Args:
-            path (str): 저장 경로
-        """
-        self.sb3_model.save(path)
-    
-    @classmethod
-    def load(cls, path: str, model_type: str = "ppo") -> 'RLModel':
-        """
-        모델 로드
-        
-        Args:
-            path (str): 모델 경로
-            model_type (str): 모델 유형
-            
-        Returns:
-            RLModel: 로드된 모델
-        """
-        if model_type.lower() == "ppo":
-            sb3_model = PPO.load(path)
-        elif model_type.lower() == "a2c":
-            sb3_model = A2C.load(path)
-        elif model_type.lower() == "dqn":
-            sb3_model = DQN.load(path)
-        else:
-            raise ValueError(f"지원하지 않는 모델 유형: {model_type}")
-        
-        return cls(sb3_model, model_type)
-
-
-class ModelEnsemble:
-    """모델 앙상블"""
-    
-    def __init__(self, models: List[RLModel], weights: Optional[List[float]] = None):
-        """
-        초기화
-        
-        Args:
-            models (list): RLModel 목록
-            weights (list): 각 모델의 가중치
-        """
-        self.models = models
-        
-        # 가중치 설정 (기본값: 동일 가중치)
-        if weights is None:
-            self.weights = [1.0 / len(models)] * len(models)
-        else:
-            # 가중치 정규화
-            total_weight = sum(weights)
-            self.weights = [w / total_weight for w in weights]
-    
-    def predict(self, observation: np.ndarray, deterministic: bool = True) -> Tuple[int, Dict[str, Any]]:
-        """
-        앙상블 행동 예측
-        
-        Args:
-            observation (np.ndarray): 관찰 벡터
-            deterministic (bool): 결정론적 예측 여부
-            
-        Returns:
-            tuple: (행동, 기타 정보)
-        """
-        # 각 모델의 예측 수집
-        action_votes = {0: 0.0, 1: 0.0, 2: 0.0}
-        
-        for i, model in enumerate(self.models):
-            action, _ = model.predict(observation, deterministic=deterministic)
-            action_votes[action] += self.weights[i]
-        
-        # 가장 높은 투표를 받은 행동 선택
-        max_vote = -1
-        chosen_action = 0
-        
-        for action, vote in action_votes.items():
-            if vote > max_vote:
-                max_vote = vote
-                chosen_action = action
-        
-        # 결과 반환
-        return chosen_action, {'votes': action_votes}
-    
-    def save_ensemble(self, path: str) -> None:
-        """
-        앙상블 모델 저장
-        
-        Args:
-            path (str): 저장 경로
-        """
-        with open(path, 'wb') as f:
-            pickle.dump(self, f)
-    
-    @classmethod
-    def load_ensemble(cls, path: str) -> 'ModelEnsemble':
-        """
-        앙상블 모델 로드
-        
-        Args:
-            path (str): 모델 경로
-            
-        Returns:
-            ModelEnsemble: 로드된 앙상블
-        """
-        with open(path, 'rb') as f:
-            ensemble = pickle.load(f)
-        
-        return ensemble 
+        profit = self._calculate_portfolio_value() - self.initial_balance
+        print(f"Step: {self.current_step}, Price: {self.current_price:.2f}, "
+              f"Shares: {self.shares_held}, Balance: {self.balance:.2f}, "
+              f"Profit: {profit:.2f}") 
