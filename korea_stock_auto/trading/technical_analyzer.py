@@ -9,89 +9,29 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple, Union
 
 from korea_stock_auto.api import KoreaInvestmentApiClient
+from korea_stock_auto.data.database import TechnicalDataManager
+from korea_stock_auto.reinforcement.rl_data.technical_indicators import TechnicalIndicatorGenerator
 from korea_stock_auto.utils.utils import send_message
 
 logger = logging.getLogger("stock_auto")
 
-class TechnicalAnalyzer:
-    """주식 기술적 분석 클래스"""
+class TechnicalAnalyzer(TechnicalIndicatorGenerator):
+    """
+    주식 기술적 분석 클래스
+    TechnicalIndicatorGenerator를 상속받아 기술적 지표 생성 기능을 재사용합니다.
+    """
     
-    def __init__(self, api_client: KoreaInvestmentApiClient):
+    def __init__(self, api_client: KoreaInvestmentApiClient, db_path: str = "stock_data.db"):
         """
         기술적 분석기 초기화
         
         Args:
             api_client: API 클라이언트 인스턴스
+            db_path: 데이터베이스 파일 경로
         """
+        super().__init__(db_path=db_path)
         self.api = api_client
-    
-    def calculate_macd(self, prices: List[float], short_period: int = 12, long_period: int = 26, signal_period: int = 9) -> Dict[str, float]:
-        """
-        MACD(Moving Average Convergence Divergence) 계산 함수
-        
-        Args:
-            prices: 가격 데이터 리스트
-            short_period: 단기 이동평균 기간
-            long_period: 장기 이동평균 기간
-            signal_period: 시그널 라인 기간
-            
-        Returns:
-            dict: MACD 값, 시그널 라인 값, 히스토그램 값을 포함하는 딕셔너리
-        """
-        if len(prices) < long_period:
-            return {
-                "macd": 0,
-                "signal": 0,
-                "histogram": 0
-            }
-            
-        # 단기 지수 이동평균
-        short_ema = self._calculate_ema(prices, short_period)
-        
-        # 장기 지수 이동평균
-        long_ema = self._calculate_ema(prices, long_period)
-        
-        # MACD 라인
-        macd_line = short_ema - long_ema
-        
-        # 시그널 라인 (MACD의 지수 이동평균)
-        signal_line = self._calculate_ema([macd_line], signal_period)
-        
-        # 히스토그램 (MACD - 시그널 라인)
-        histogram = macd_line - signal_line
-        
-        return {
-            "macd": macd_line,
-            "signal": signal_line,
-            "histogram": histogram
-        }
-    
-    def _calculate_ema(self, prices: List[float], period: int) -> float:
-        """
-        지수 이동평균(EMA) 계산 함수
-        
-        Args:
-            prices: 가격 데이터 리스트
-            period: 이동평균 기간
-            
-        Returns:
-            float: 지수 이동평균 값
-        """
-        if len(prices) < period:
-            return np.mean(prices)
-            
-        # 단순 이동평균으로 초기화
-        sma = np.mean(prices[:period])
-        
-        # 승수 계산 (일반적으로 2/(기간+1) 사용)
-        multiplier = 2 / (period + 1)
-        
-        # EMA 계산
-        ema = sma
-        for price in prices[period:]:
-            ema = (price - ema) * multiplier + ema
-            
-        return ema
+        self.tech_data_manager = TechnicalDataManager(db_path)
     
     def get_moving_average(self, code: str, period: int = 20) -> Optional[float]:
         """
@@ -104,7 +44,14 @@ class TechnicalAnalyzer:
         Returns:
             float or None: 이동평균 값 또는 데이터가 없는 경우 None
         """
-        # 코드 포맷: 12자리로 변환
+        # 먼저 데이터베이스에서 지표 조회
+        indicator_name = f"sma_{period}" if period in [5, 20, 60, 120] else "sma_20"  # 가장 가까운 값 사용
+        latest_indicators = self.tech_data_manager.get_latest_indicators(code)
+        
+        if latest_indicators and indicator_name in latest_indicators:
+            return latest_indicators[indicator_name]
+        
+        # 데이터베이스에 없으면 API에서 가져와 계산
         formatted_code = code.zfill(12)
         daily_data = self.api.get_daily_data(formatted_code)
         
@@ -134,6 +81,13 @@ class TechnicalAnalyzer:
         Returns:
             float or None: RSI 값 또는 데이터가 없는 경우 None
         """
+        # 먼저 데이터베이스에서 지표 조회
+        latest_indicators = self.tech_data_manager.get_latest_indicators(code)
+        
+        if latest_indicators and 'rsi' in latest_indicators:
+            return latest_indicators['rsi']
+            
+        # 데이터베이스에 없으면 API에서 가져와 계산
         formatted_code = code.zfill(12)
         daily_data = self.api.get_daily_data(formatted_code)
         
@@ -183,6 +137,18 @@ class TechnicalAnalyzer:
         Returns:
             dict or None: 볼린저 밴드 값 또는 데이터가 없는 경우 None
         """
+        # 먼저 데이터베이스에서 지표 조회
+        latest_indicators = self.tech_data_manager.get_latest_indicators(code)
+        
+        if latest_indicators and 'bollinger_upper' in latest_indicators:
+            return {
+                "upper": latest_indicators['bollinger_upper'],
+                "middle": latest_indicators['bollinger_middle'],
+                "lower": latest_indicators['bollinger_lower'],
+                "bandwidth": (latest_indicators['bollinger_upper'] - latest_indicators['bollinger_lower']) / latest_indicators['bollinger_middle'] if latest_indicators['bollinger_middle'] != 0 else 0
+            }
+            
+        # 데이터베이스에 없으면 API에서 가져와 계산
         formatted_code = code.zfill(12)
         daily_data = self.api.get_daily_data(formatted_code)
         
@@ -226,6 +192,13 @@ class TechnicalAnalyzer:
         Returns:
             float or None: 변동성 값 또는 데이터가 없는 경우 None
         """
+        # 먼저 데이터베이스에서 지표 조회
+        latest_indicators = self.tech_data_manager.get_latest_indicators(code)
+        
+        if latest_indicators and 'atr' in latest_indicators:  # ATR로 변동성 대체
+            return latest_indicators['atr']
+            
+        # 데이터베이스에 없으면 API에서 가져와 계산
         formatted_code = code.zfill(12)
         daily_data = self.api.get_daily_data(formatted_code)
         
@@ -251,7 +224,7 @@ class TechnicalAnalyzer:
     
     def is_golden_cross(self, code: str, short_period: int = 5, long_period: int = 20) -> Optional[bool]:
         """
-        골든 크로스 발생 여부 확인
+        골든 크로스 확인 함수
         
         Args:
             code: 종목 코드
@@ -259,32 +232,30 @@ class TechnicalAnalyzer:
             long_period: 장기 이동평균 기간
             
         Returns:
-            bool or None: 골든 크로스 발생 여부 또는 데이터가 없는 경우 None
+            bool or None: 골든 크로스 여부 또는 데이터가 없는 경우 None
         """
-        formatted_code = code.zfill(12)
-        daily_data = self.api.get_daily_data(formatted_code)
-        
-        if not daily_data or len(daily_data) < long_period + 2:  # 이전 데이터까지 필요
-            logger.warning(f"{code} 일봉 데이터가 부족하여 골든 크로스 확인 불가")
-            return None
-            
         try:
-            # 종가 데이터 추출
-            closes = [float(candle["stck_clpr"]) for candle in daily_data[:long_period+2]]
+            # 필요한 이동평균 계산
+            formatted_code = code.zfill(12)
+            daily_data = self.api.get_daily_data(formatted_code)
             
-            # 현재 이동평균
-            current_short_ma = np.mean(closes[:short_period])
-            current_long_ma = np.mean(closes[:long_period])
+            if not daily_data or len(daily_data) < long_period + 2:  # 최소 2일치 더 필요
+                logger.warning(f"{code} 일봉 데이터가 부족하여 골든 크로스 확인 불가")
+                return None
             
-            # 이전 이동평균
-            prev_closes = closes[1:]  # 하루 전 데이터
-            prev_short_ma = np.mean(prev_closes[:short_period])
-            prev_long_ma = np.mean(prev_closes[:long_period])
+            # 전날과 오늘의 종가 데이터 추출
+            closes_yesterday = [float(candle["stck_clpr"]) for candle in daily_data[1:]]
+            closes_today = [float(candle["stck_clpr"]) for candle in daily_data[:-1]]
             
-            # 골든 크로스 확인 (단기 > 장기 교차)
-            is_golden = (prev_short_ma <= prev_long_ma) and (current_short_ma > current_long_ma)
+            # 이동평균 계산
+            short_ma_yesterday = np.mean(closes_yesterday[:short_period])
+            long_ma_yesterday = np.mean(closes_yesterday[:long_period])
             
-            return is_golden
+            short_ma_today = np.mean(closes_today[:short_period])
+            long_ma_today = np.mean(closes_today[:long_period])
+            
+            # 전날: 단기 < 장기, 오늘: 단기 > 장기 => 골든 크로스
+            return (short_ma_yesterday < long_ma_yesterday) and (short_ma_today > long_ma_today)
             
         except Exception as e:
             logger.error(f"{code} 골든 크로스 확인 실패: {e}")

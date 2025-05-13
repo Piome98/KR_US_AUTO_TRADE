@@ -54,7 +54,13 @@ class RLDataManager:
         self.tech_indicator = TechnicalIndicatorGenerator(db_path=db_path)
         self.normalizer = DataNormalizer()
         self.sequence_generator = SequenceGenerator(lookback=lookback, feature_columns=feature_columns)
-        self.market_integrator = MarketDataIntegrator(cache_dir=self.cache_dir)
+        
+        # 시장 데이터 통합 모듈 - 데이터베이스 매니저 전달
+        self.market_integrator = MarketDataIntegrator(
+            cache_dir=self.cache_dir,
+            price_manager=self.price_manager,
+            market_manager=self.market_manager
+        )
     
     def prepare_api_data_for_rl(self, code: str, lookback_days: int = 30) -> pd.DataFrame:
         """
@@ -89,8 +95,8 @@ class RLDataManager:
             # 5. 데이터 정규화
             df = self.normalizer.normalize_data(df)
             
-            # 6. 시장 데이터 통합 (데이터베이스 활용)
-            df = self._integrate_market_data(df, code, lookback_days)
+            # 6. 시장 데이터 통합 (통합된 인터페이스 사용)
+            df = self.market_integrator.combine_market_data(df, code)
             
             # 7. 강화학습용 데이터 저장
             self.preprocessor.save_processed_data(df, code, suffix='rl_processed')
@@ -101,86 +107,6 @@ class RLDataManager:
         except Exception as e:
             logger.error(f"강화학습용 데이터 준비 실패: {e}", exc_info=True)
             return pd.DataFrame()
-    
-    def _integrate_market_data(self, df: pd.DataFrame, code: str, days: int = 30) -> pd.DataFrame:
-        """
-        시장 데이터 통합 (데이터베이스 활용)
-        
-        Args:
-            df: 원본 데이터프레임
-            code: 종목 코드
-            days: 조회 기간(일)
-            
-        Returns:
-            pd.DataFrame: 시장 데이터가 통합된 데이터프레임
-        """
-        try:
-            # 데이터베이스에서 시장 지수 데이터 조회
-            kospi_data = self.market_manager.get_market_index_history('KOSPI', days)
-            kosdaq_data = self.market_manager.get_market_index_history('KOSDAQ', days)
-            
-            if kospi_data.empty and kosdaq_data.empty:
-                # 데이터베이스에 시장 데이터가 없는 경우 기존 통합 방식 사용
-                logger.info(f"데이터베이스에 시장 데이터가 없어 기존 통합 방식 사용")
-                return self.market_integrator.combine_market_data(df, code)
-            
-            # 날짜 형식 통일
-            if 'date' in df.columns:
-                df['date'] = pd.to_datetime(df['date'])
-            
-            # KOSPI 데이터 통합
-            if not kospi_data.empty:
-                kospi_data['date'] = pd.to_datetime(kospi_data['date'])
-                kospi_data = kospi_data.rename(columns={
-                    'close': 'kospi_close',
-                    'volume': 'kospi_volume',
-                    'change_percent': 'kospi_change'
-                })
-                
-                df = pd.merge(
-                    df,
-                    kospi_data[['date', 'kospi_close', 'kospi_volume', 'kospi_change']],
-                    on='date',
-                    how='left'
-                )
-            
-            # KOSDAQ 데이터 통합
-            if not kosdaq_data.empty:
-                kosdaq_data['date'] = pd.to_datetime(kosdaq_data['date'])
-                kosdaq_data = kosdaq_data.rename(columns={
-                    'close': 'kosdaq_close',
-                    'volume': 'kosdaq_volume',
-                    'change_percent': 'kosdaq_change'
-                })
-                
-                df = pd.merge(
-                    df,
-                    kosdaq_data[['date', 'kosdaq_close', 'kosdaq_volume', 'kosdaq_change']],
-                    on='date',
-                    how='left'
-                )
-            
-            # 상관관계 데이터 추가 (기존 코드를 일부 유지)
-            if not df.empty and 'close' in df.columns:
-                # 주가와 지수 간 상관관계
-                if 'kospi_close' in df.columns:
-                    df['kospi_corr'] = self._calculate_rolling_correlation(df['close'], df['kospi_close'])
-                
-                if 'kosdaq_close' in df.columns:
-                    df['kosdaq_corr'] = self._calculate_rolling_correlation(df['close'], df['kosdaq_close'])
-            
-            # NaN 값 처리
-            df = df.fillna(method='ffill')
-            df = df.fillna(method='bfill')
-            df = df.fillna(0)
-            
-            logger.info(f"시장 데이터 통합 완료 (데이터베이스 활용)")
-            return df
-            
-        except Exception as e:
-            logger.error(f"시장 데이터 통합 실패: {e}", exc_info=True)
-            # 실패 시 기존 통합 방식 사용
-            return self.market_integrator.combine_market_data(df, code)
     
     def _calculate_rolling_correlation(self, series1: pd.Series, series2: pd.Series, window: int = 20) -> pd.Series:
         """
@@ -248,75 +174,89 @@ class RLDataManager:
                     done=rl_dataset['done']
                 )
                 
-                # 정보 파일 저장
                 with open(os.path.join(self.cache_dir, f'{code}_rl_dataset_info.json'), 'w') as f:
                     json.dump(rl_dataset['info'], f, indent=2)
                 
                 logger.info(f"{code} 강화학습 데이터셋 저장 완료")
+                
             except Exception as e:
                 logger.error(f"데이터셋 저장 실패: {e}", exc_info=True)
             
             return rl_dataset
             
         except Exception as e:
-            logger.error(f"훈련 데이터셋 생성 실패: {e}", exc_info=True)
+            logger.error(f"강화학습 데이터셋 생성 실패: {e}", exc_info=True)
             return {}
     
     def get_current_state(self, code: str) -> np.ndarray:
         """
-        현재 상태 벡터 생성
+        현재 거래 상태 가져오기 (최신 데이터)
         
         Args:
             code: 종목 코드
             
         Returns:
-            numpy.ndarray: 현재 상태 벡터
+            np.ndarray: 강화학습 환경 상태 (feature vector)
         """
         try:
-            # 1. 실시간 데이터 로드
-            realtime_data = self.preprocessor.load_realtime_data(code)
+            # 처리된 데이터 가져오기
+            df = self.prepare_api_data_for_rl(code, lookback_days=self.sequence_generator.lookback + 5)
             
-            if not realtime_data:
-                logger.warning(f"{code} 실시간 데이터가 없습니다.")
+            if df.empty:
+                logger.warning(f"{code} 현재 상태 데이터 없음")
                 return np.array([])
+                
+            # 정규화된 특성 생성
+            df_features = self.normalizer.create_normalized_features(df)
             
-            # 2. 과거 처리된 데이터 로드
-            rl_data_path = os.path.join(self.cache_dir, f'{code}_rl_processed.csv')
+            # 가장 최근 상태 반환
+            state = self.sequence_generator.create_state(df_features)
             
-            historical_data = None
-            if os.path.exists(rl_data_path):
-                historical_data = pd.read_csv(rl_data_path)
-                if 'date' in historical_data.columns:
-                    historical_data['date'] = pd.to_datetime(historical_data['date'])
-                    historical_data = historical_data.sort_values('date')
-            
-            # 3. 현재 상태 벡터 생성
-            state_vector = self.sequence_generator.prepare_state_vector(realtime_data, historical_data)
-            
-            return state_vector
+            if state is None or len(state) == 0:
+                logger.warning(f"{code} 현재 상태 생성 실패")
+                return np.array([])
+                
+            return state
             
         except Exception as e:
-            logger.error(f"현재 상태 벡터 생성 실패: {e}", exc_info=True)
+            logger.error(f"현재 상태 가져오기 실패: {e}", exc_info=True)
             return np.array([])
     
     def update_datasets(self, codes: List[str]) -> bool:
         """
-        여러 종목의 데이터셋 일괄 업데이트
+        여러 종목의 데이터셋 업데이트
         
         Args:
             codes: 종목 코드 리스트
             
         Returns:
-            bool: 성공 여부
+            bool: 업데이트 성공 여부
         """
         try:
-            for code in codes:
-                logger.info(f"{code} 강화학습 데이터셋 업데이트 시작")
-                self.create_training_dataset(code)
+            results = []
             
-            logger.info(f"{len(codes)}개 종목 데이터셋 업데이트 완료")
-            return True
+            for code in codes:
+                logger.info(f"{code} 데이터셋 업데이트 시작")
+                
+                # 데이터셋 생성
+                dataset = self.create_training_dataset(code)
+                
+                # 성공 여부 저장
+                results.append(bool(dataset))
+                
+                # 로그 메시지
+                if dataset:
+                    logger.info(f"{code} 데이터셋 업데이트 완료: {dataset['info']['data_length']}개 데이터, {dataset['info']['features']}개 특성")
+                else:
+                    logger.warning(f"{code} 데이터셋 업데이트 실패")
+            
+            # 모든 코드에 대해 성공했는지 확인
+            success_rate = sum(results) / len(results) if results else 0
+            
+            logger.info(f"데이터셋 업데이트 완료: {len(codes)}개 종목 중 {sum(results)}개 성공 ({success_rate:.1%})")
+            
+            return all(results)
             
         except Exception as e:
-            logger.error(f"데이터셋 일괄 업데이트 실패: {e}", exc_info=True)
+            logger.error(f"데이터셋 업데이트 실패: {e}", exc_info=True)
             return False 
