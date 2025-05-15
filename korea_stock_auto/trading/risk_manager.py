@@ -48,6 +48,7 @@ class RiskManager:
     def _initialize_assets(self):
         """초기 자산 가치 계산"""
         self.initial_total_assets = self.calculate_total_assets()
+        # 최초 초기화 시에만 로그 출력 
         logger.info(f"초기 총 자산 가치: {self.initial_total_assets:,}원")
     
     def calculate_total_assets(self) -> float:
@@ -59,18 +60,20 @@ class RiskManager:
         """
         try:
             # 현금 잔고 조회
-            cash_balance = self.api.get_balance()
+            cash_balance_info = self.api.get_balance()
+            cash_balance = cash_balance_info.get("cash", 0) if cash_balance_info else 0
             
             # 주식 잔고 조회
-            stock_balance = self.api.get_stock_balance()
+            stock_balance_info = self.api.get_stock_balance()
             
             # 주식 평가 금액 계산
             stock_value = 0
-            for code, stock_info in stock_balance.items():
-                qty = stock_info.get("qty", 0)
-                price = stock_info.get("price", 0)
-                stock_value += qty * price
-                
+            if stock_balance_info and "stocks" in stock_balance_info:
+                for stock in stock_balance_info.get("stocks", []):
+                    units = stock.get("units", 0)
+                    current_price = stock.get("current_price", 0)
+                    stock_value += units * current_price
+                    
             # 총 자산 가치
             total_assets = cash_balance + stock_value
             

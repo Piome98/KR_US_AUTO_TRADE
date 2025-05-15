@@ -13,6 +13,7 @@ import logging
 import hashlib
 import base64
 import hmac
+import os
 from typing import Dict, Any, Optional, Union, List, Callable, TypeVar, cast
 
 from korea_stock_auto.config import DISCORD_WEBHOOK_URL, APP_KEY, APP_SECRET, URL_BASE
@@ -23,6 +24,60 @@ R = TypeVar('R')
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
+
+def setup_logger(log_level: str = 'INFO', log_file: Optional[str] = None) -> None:
+    """
+    로깅 설정
+    
+    Args:
+        log_level: 로그 레벨 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        log_file: 로그 파일 경로 (None이면 콘솔에만 출력)
+    """
+    # 로그 레벨 매핑
+    level_map = {
+        'DEBUG': logging.DEBUG,
+        'INFO': logging.INFO,
+        'WARNING': logging.WARNING,
+        'ERROR': logging.ERROR,
+        'CRITICAL': logging.CRITICAL
+    }
+    log_level_num = level_map.get(log_level.upper(), logging.INFO)
+    
+    # 루트 로거 설정
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level_num)
+    
+    # 기존 핸들러 제거
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # 포맷터 설정
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    # 콘솔 핸들러 추가
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(log_level_num)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+    
+    # 파일 핸들러 추가 (지정된 경우)
+    if log_file:
+        # 로그 디렉토리 생성
+        log_dir = os.path.dirname(log_file)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+            
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(log_level_num)
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+    
+    # 모듈별 로거 설정
+    stock_logger = logging.getLogger("stock_auto")
+    stock_logger.setLevel(log_level_num)
+    stock_logger.propagate = True
+    
+    logger.info(f"로깅 설정 완료 (레벨: {log_level}, 파일: {log_file if log_file else '없음'})")
 
 def send_message(msg: str) -> None:
     """
@@ -160,13 +215,19 @@ def wait(seconds: float = 1.0, jitter: float = 0.5) -> None:
     wait_time = seconds + jitter_amount
     time.sleep(wait_time)
 
-def rate_limit_wait(base_time: float = 0.2) -> None:
+def rate_limit_wait(client_or_base_time: Any = 0.2) -> None:
     """
     API 레이트 리밋 방지를 위한 짧은 대기
     
     Args:
-        base_time: 기본 대기 시간(초)
+        client_or_base_time: 클라이언트 객체 또는 기본 대기 시간(초)
     """
+    # 클라이언트 객체가 전달된 경우 기본값 사용
+    if not isinstance(client_or_base_time, (int, float)):
+        base_time = 0.2
+    else:
+        base_time = client_or_base_time
+    
     # 0.1~0.3초의 짧은 랜덤 대기
     jitter = random.uniform(0, 0.2)
     time.sleep(base_time + jitter)
@@ -238,48 +299,50 @@ def format_date(dt: Optional[datetime.datetime] = None) -> str:
         dt = datetime.datetime.now()
     return dt.strftime('%Y%m%d')
 
-def retry_on_failure(func: Callable[..., R], max_retries: int = 3, base_wait: float = 1.0, 
-                    error_msg_prefix: str = "작업 실패") -> Optional[R]:
+def retry_on_failure(max_retries: int = 3, base_wait: float = 1.0, 
+                    error_msg_prefix: str = "작업 실패"):
     """
-    실패 시 재시도 데코레이터
+    실패 시 재시도 데코레이터 팩토리
     
     Args:
-        func: 실행할 함수
         max_retries: 최대 재시도 횟수
         base_wait: 기본 대기 시간
         error_msg_prefix: 오류 메시지 접두사
         
     Returns:
-        함수의 결과 또는 None (모든 재시도 실패 시)
+        데코레이터 함수
     """
-    def wrapper(*args: Any, **kwargs: Any) -> Optional[R]:
-        retry_count = 0
+    def decorator(func: Callable[..., R]) -> Callable[..., Optional[R]]:
+        def wrapper(*args: Any, **kwargs: Any) -> Optional[R]:
+            retry_count = 0
+            
+            while retry_count <= max_retries:
+                try:
+                    if retry_count > 0:
+                        logger.info(f"재시도 {retry_count}/{max_retries} 중...")
+                    
+                    result = func(*args, **kwargs)
+                    if retry_count > 0:
+                        logger.info(f"재시도 성공 ({retry_count}/{max_retries})")
+                    
+                    return result
+                    
+                except Exception as e:
+                    retry_count += 1
+                    wait_time = base_wait * (2 ** (retry_count - 1))  # 지수 백오프
+                    
+                    if retry_count <= max_retries:
+                        error_msg = f"{error_msg_prefix}: {e}, {retry_count}/{max_retries} 재시도 ({wait_time:.1f}초 대기)"
+                        logger.warning(error_msg)
+                        time.sleep(wait_time)
+                    else:
+                        error_msg = f"{error_msg_prefix}: {e}, 최대 재시도 횟수 초과"
+                        logger.error(error_msg)
+                        send_message(error_msg)
+                        return None
+            
+            return None
         
-        while retry_count <= max_retries:
-            try:
-                if retry_count > 0:
-                    logger.info(f"재시도 {retry_count}/{max_retries} 중...")
-                
-                result = func(*args, **kwargs)
-                if retry_count > 0:
-                    logger.info(f"재시도 성공 ({retry_count}/{max_retries})")
-                
-                return result
-                
-            except Exception as e:
-                retry_count += 1
-                wait_time = base_wait * (2 ** (retry_count - 1))  # 지수 백오프
-                
-                if retry_count <= max_retries:
-                    error_msg = f"{error_msg_prefix}: {e}, {retry_count}/{max_retries} 재시도 ({wait_time:.1f}초 대기)"
-                    logger.warning(error_msg)
-                    time.sleep(wait_time)
-                else:
-                    error_msg = f"{error_msg_prefix}: {e}, 최대 재시도 횟수 초과"
-                    logger.error(error_msg)
-                    send_message(error_msg)
-                    return None
-        
-        return None
+        return cast(Callable[..., Optional[R]], wrapper)
     
-    return cast(Callable[..., Optional[R]], wrapper) 
+    return decorator 

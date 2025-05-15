@@ -10,6 +10,7 @@ import logging
 import time
 from typing import Dict, List, Optional, Any, Union, Tuple, TypeVar, cast
 from datetime import datetime, timedelta
+import os
 
 from korea_stock_auto.config import (
     APP_KEY, APP_SECRET, URL_BASE, 
@@ -54,6 +55,18 @@ class KoreaInvestmentApiClient:
         # 액세스 토큰 발급
         self.issue_access_token()
     
+    def _get_cache_path(self, filename: str) -> str:
+        """
+        캐시 파일 경로 반환
+        
+        Args:
+            filename: 캐시 파일명
+            
+        Returns:
+            str: 캐시 파일의 전체 경로
+        """
+        return os.path.join(os.path.dirname(__file__), '../../../../data/cache', filename)
+    
     def issue_access_token(self) -> bool:
         """
         액세스 토큰 발급
@@ -64,14 +77,16 @@ class KoreaInvestmentApiClient:
             bool: 토큰 발급 성공 여부
         """
         try:
-            result = get_access_token()
-            if not result:
+            access_token = get_access_token()
+            if not access_token:
                 logger.error("액세스 토큰 발급 결과가 없습니다.")
                 return False
             
-            self.access_token = result["access_token"]
-            # 토큰 만료 시간을 60초 일찍 설정하여 여유를 둠
-            self.token_expired_at = datetime.now() + timedelta(seconds=result["expires_in"] - 60)
+            # 토큰 저장
+            self.access_token = access_token
+            
+            # 토큰 만료 시간 설정 (기본 1일, 60초 일찍 만료되도록 설정)
+            self.token_expired_at = datetime.now() + timedelta(seconds=86400 - 60)
             
             logger.info("액세스 토큰 발급 성공")
             return True
@@ -95,7 +110,8 @@ class KoreaInvestmentApiClient:
             RuntimeError: 토큰이 없거나 갱신에 실패한 경우
         """
         # 토큰 만료 여부 확인 및 갱신
-        if not refresh_token_if_needed(self):
+        if not self.access_token or (self.token_expired_at and datetime.now() > self.token_expired_at):
+            # 토큰이 없거나 만료된 경우 새로 발급
             if not self.issue_access_token():
                 raise RuntimeError("액세스 토큰 발급 및 갱신 실패")
         
@@ -162,7 +178,7 @@ class KoreaInvestmentApiClient:
             send_message(f"[오류] {error_msg}: {e}")
             return None
     
-    @retry_on_failure(max_retries=3, retry_delay=1)
+    @retry_on_failure(max_retries=3, base_wait=1)
     def _request_get(self, 
                     url: str, 
                     headers: Dict[str, str], 
@@ -184,7 +200,7 @@ class KoreaInvestmentApiClient:
         response = requests.get(url, headers=headers, params=params, timeout=10)
         return self._handle_response(response, error_msg)
     
-    @retry_on_failure(max_retries=3, retry_delay=1)
+    @retry_on_failure(max_retries=3, base_wait=1)
     def _request_post(self, 
                      url: str, 
                      headers: Dict[str, str], 

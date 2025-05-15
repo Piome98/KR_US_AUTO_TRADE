@@ -23,30 +23,40 @@ class Trader:
     
     def __init__(self):
         """트레이더 초기화"""
-        # API 클라이언트 초기화
+        # API 클라이언트 생성
         self.api = KoreaInvestmentApiClient()
         
-        # 각 컴포넌트 초기화
+        # 거래 상태 변수
+        self.bought_list = []  # 매수한 종목 리스트
+        self.symbol_list = []  # 관심 종목 리스트
+        self.total_cash = 0    # 총 현금
+        self.stock_dict = {}   # 보유 종목 정보
+        self.entry_prices = {} # 종목별 매수 가격
+        self.buy_amount = 0    # 종목별 매수 금액
+        self.buy_percentage = TRADE_CONFIG.get("buy_percentage", 0.2)  # 매수 비율 (기본: 현금의 20%)
+        self.target_buy_count = TRADE_CONFIG.get("target_buy_count", 5)  # 목표 매수 종목 수
+        self.soldout = False   # 전량 매도 여부
+        
+        # 먼저 필요한 컴포넌트들 생성
+        # 기술적 분석기 생성
         self.analyzer = TechnicalAnalyzer(self.api)
-        self.selector = StockSelector(self.api)
-        self.executor = TradeExecutor(self.api)
+        
+        # 위험 관리자 생성
         self.risk_manager = RiskManager(self.api)
         
-        # 매매 전략 초기화
-        self.strategy_type = TRADE_CONFIG.get("strategy", "macd")
-        self.strategy = self._create_strategy(self.strategy_type)
+        # 매매 실행기 생성
+        self.executor = TradeExecutor(self.api)
         
-        # 매매 설정 로드
-        self.target_buy_count = TRADE_CONFIG.get("target_buy_count", 5)  # 매수할 종목 수
-        self.buy_percentage = TRADE_CONFIG.get("buy_percentage", 0.2)    # 종목당 매수 금액 비율
+        # 종목 선택기 생성
+        self.selector = StockSelector(self.api)
         
-        # 상태 변수 초기화
-        self.symbol_list = []       # 관심 종목 리스트
-        self.bought_list = []       # 매수 완료된 종목 리스트
-        self.entry_prices = {}      # 종목별 매수가
-        self.total_cash = 0         # 보유 현금
-        self.stock_dict = {}        # 보유 주식 정보
-        self.soldout = False        # 전량 매도 여부
+        # 전략 생성 - analyzer를 사용하므로 analyzer 초기화 후에 생성
+        strategy_type = TRADE_CONFIG.get("strategy", "ma")
+        self.strategy = self._create_strategy(strategy_type)
+        
+        # 계좌 정보 업데이트 주기 (초)
+        self.account_update_interval = 60  # 1분
+        self.last_account_update_time = 0
         
         # 초기화
         self.initialize_trading()
@@ -70,17 +80,18 @@ class Trader:
     
     def initialize_trading(self):
         """매매 초기화"""
-        # 보유 현금 조회
-        self.total_cash = self.api.get_balance()
-        
-        # 현재 보유 주식 조회
-        self.stock_dict = self.api.get_stock_balance()
-        self.bought_list = list(self.stock_dict.keys())
+        # 계좌 정보 및 보유 주식 정보 동시에 조회하여 중복 API 호출 방지
+        # 초기화 시에는 무조건 업데이트하도록 시간 초기화
+        self.last_account_update_time = 0
+        self._update_account_info(is_init=True)
         
         # 매수가 정보 초기화
         self.entry_prices = {}
         for code, stock_info in self.stock_dict.items():
-            self.entry_prices[code] = stock_info.get("avg_price", 0)
+            if isinstance(stock_info, dict):
+                self.entry_prices[code] = stock_info.get("avg_buy_price", 0)
+            else:
+                logger.warning(f"{code} 종목 정보가 딕셔너리가 아닙니다: {type(stock_info)}")
         
         # 매수 금액 설정
         self.buy_amount = self.total_cash * self.buy_percentage
@@ -92,8 +103,74 @@ class Trader:
         send_message(f"[초기화 완료] 현금: {self.total_cash:,}원, 보유 종목: {len(self.bought_list)}개")
         
         if self.bought_list:
-            stock_names = [f"{code}({self.stock_dict[code].get('name', 'N/A')})" for code in self.bought_list]
+            stock_names = []
+            for code in self.bought_list:
+                stock_info = self.stock_dict.get(code, {})
+                name = "N/A"
+                if isinstance(stock_info, dict):
+                    name = stock_info.get("prdt_name", code)
+                stock_names.append(f"{code}({name})")
+            
+            logger.info(f"보유 종목: {', '.join(stock_names)}")
             send_message(f"[보유 종목] {', '.join(stock_names)}")
+    
+    def _update_account_info(self, is_init=False):
+        """
+        계좌 정보 및 보유 종목 정보 업데이트
+        
+        Args:
+            is_init (bool): 초기화 과정에서 호출된 경우 True, 업데이트만 하는 경우 False
+        """
+        # 현재 시각 확인
+        current_time = time.time()
+        
+        # 마지막 업데이트 이후 일정 시간이 경과한 경우에만 업데이트
+        if current_time - self.last_account_update_time < self.account_update_interval:
+            return
+            
+        # 계좌 잔고 조회
+        if is_init:
+            logger.info("계좌 잔고 및 보유 종목 정보 업데이트")
+        balance_info = self.api.get_balance()
+        stock_balance = self.api.get_stock_balance()
+        
+        # 계좌 잔고 정보 업데이트
+        if balance_info:
+            self.total_cash = balance_info.get("cash", 0)
+            if is_init:
+                logger.info(f"계좌 잔고 조회 성공: 현금={balance_info['cash']:,.0f}원, "
+                           f"주식={balance_info['stocks_value']:,.0f}원, "
+                           f"총평가={balance_info['total_assets']:,.0f}원, "
+                           f"수익률={balance_info['total_profit_loss_rate']:.2f}%")
+        else:
+            logger.warning("계좌 잔고 정보 조회 실패")
+            
+        # 보유 종목 정보 업데이트
+        if stock_balance:
+            if "stocks" in stock_balance and isinstance(stock_balance["stocks"], list):
+                # 보유 종목 딕셔너리 초기화
+                self.stock_dict = {}
+                
+                # 각 종목 정보를 종목 코드를 키로 하여 딕셔너리에 저장
+                for stock in stock_balance["stocks"]:
+                    code = stock.get("code")
+                    if code:
+                        self.stock_dict[code] = stock
+                
+                # 보유 종목 리스트 업데이트
+                self.bought_list = list(self.stock_dict.keys())
+                
+                if is_init:
+                    logger.info(f"보유 종목 {len(self.bought_list)}개 정보 업데이트 완료")
+                    logger.info(f"주식 보유 종목 조회 성공: {len(self.bought_list)}종목, 총평가액: {balance_info['total_assets']:,.0f}원")
+            else:
+                logger.warning("보유 종목 정보 형식이 예상과 다릅니다.")
+                # 응답 형식 로깅
+                logger.debug(f"stock_balance: {stock_balance}")
+        else:
+            logger.warning("보유 종목 정보 조회 실패")
+        
+        self.last_account_update_time = current_time
     
     def select_interest_stocks(self):
         """
@@ -162,11 +239,8 @@ class Trader:
             self.bought_list.append(code)
             self.entry_prices[code] = current_price
             
-            # 현금 업데이트
-            self.total_cash = self.api.get_balance()
-            
-            # 보유 주식 정보 업데이트
-            self.stock_dict = self.api.get_stock_balance()
+            # 계좌 정보 업데이트
+            self._update_account_info()
             
             # 위험 관리 업데이트
             self.risk_manager.update_daily_pl()
@@ -191,7 +265,7 @@ class Trader:
             return False
             
         # 보유 수량 확인
-        quantity = self.stock_dict.get(code, {}).get("qty", 0)
+        quantity = self.stock_dict.get(code, {}).get("units", 0)
         if quantity <= 0:
             logger.warning(f"{code} 보유 수량 없음")
             return False
@@ -241,11 +315,8 @@ class Trader:
             if code in self.entry_prices:
                 del self.entry_prices[code]
                 
-            # 현금 업데이트
-            self.total_cash = self.api.get_balance()
-            
-            # 보유 주식 정보 업데이트
-            self.stock_dict = self.api.get_stock_balance()
+            # 계좌 정보 업데이트
+            self._update_account_info()
             
             # 위험 관리 업데이트
             self.risk_manager.update_daily_pl()
@@ -260,10 +331,11 @@ class Trader:
         모든 보유 주식 매도
         
         Returns:
-            bool: 매도 성공 여부
+            bool: 전체 매도 성공 여부
         """
-        if not self.stock_dict:
-            logger.info("매도할 주식이 없습니다.")
+        # 보유 종목이 없으면 종료
+        if not self.bought_list:
+            logger.info("매도할 보유 종목이 없습니다.")
             return True
             
         # 전체 매도 실행
@@ -277,11 +349,8 @@ class Trader:
             self.entry_prices = {}
             self.soldout = True
             
-            # 현금 업데이트
-            self.total_cash = self.api.get_balance()
-            
-            # 보유 주식 정보 업데이트
-            self.stock_dict = self.api.get_stock_balance()
+            # 계좌 정보 업데이트
+            self._update_account_info()
             
             # 위험 관리 업데이트
             self.risk_manager.update_daily_pl()
@@ -299,11 +368,8 @@ class Trader:
                     if code in self.entry_prices:
                         del self.entry_prices[code]
             
-            # 현금 업데이트
-            self.total_cash = self.api.get_balance()
-            
-            # 보유 주식 정보 업데이트
-            self.stock_dict = self.api.get_stock_balance()
+            # 계좌 정보 업데이트
+            self._update_account_info()
             
             # 위험 관리 업데이트
             self.risk_manager.update_daily_pl()
@@ -431,14 +497,21 @@ class Trader:
         if self.bought_list:
             stock_info = []
             for code in self.bought_list:
-                stock_data = self.stock_dict.get(code, {})
-                name = stock_data.get("name", "N/A")
-                qty = stock_data.get("qty", 0)
-                current_price = stock_data.get("price", 0)
-                entry_price = self.entry_prices.get(code, 0)
-                profit_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
-                
-                stock_info.append(f"{name}({code}): {qty}주, {profit_pct:.2f}%")
+                try:
+                    stock_data = self.stock_dict.get(code, {})
+                    if not isinstance(stock_data, dict):
+                        logger.warning(f"{code} 종목 정보가 딕셔너리가 아닙니다: {type(stock_data)}")
+                        continue
+                    
+                    name = stock_data.get("prdt_name", "N/A")
+                    qty = stock_data.get("units", 0)
+                    current_price = stock_data.get("current_price", 0)
+                    entry_price = self.entry_prices.get(code, 0)
+                    profit_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+                    
+                    stock_info.append(f"{name}({code}): {qty}주, {profit_pct:.2f}%")
+                except Exception as e:
+                    logger.error(f"{code} 종목 정보 처리 중 오류 발생: {e}")
                 
             send_message(f"[보유 종목] {', '.join(stock_info)}")
         else:

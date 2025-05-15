@@ -47,7 +47,10 @@ def get_access_token(force_refresh: bool = False) -> Optional[str]:
     # 토큰 발급 요청
     headers = {'content-type': 'application/json'}
     body = {'grant_type': 'client_credentials', 'appkey': APP_KEY, 'appsecret': APP_SECRET}
-    url = f'{URL_BASE}/oauth2/tokenP'
+    
+    # 모의투자와 실전투자에 따라 다른 엔드포인트 사용
+    token_endpoint = "oauth2/token" if not USE_REALTIME_API else "oauth2/tokenP"
+    url = f'{URL_BASE}/{token_endpoint}'
     
     try:
         logger.info("토큰 발급 요청 중...")
@@ -122,7 +125,10 @@ def refresh_access_token() -> Optional[str]:
         'appsecret': APP_SECRET,
         'refresh_token': REFRESH_TOKEN
     }
-    url = f'{URL_BASE}/oauth2/tokenP'
+    
+    # 모의투자와 실전투자에 따라 다른 엔드포인트 사용
+    token_endpoint = "oauth2/token" if not USE_REALTIME_API else "oauth2/tokenP"
+    url = f'{URL_BASE}/{token_endpoint}'
     
     try:
         logger.info("토큰 갱신 요청 중...")
@@ -188,7 +194,10 @@ def revoke_token() -> bool:
         'Authorization': f'Bearer {ACCESS_TOKEN}'
     }
     body = {'appkey': APP_KEY, 'appsecret': APP_SECRET}
-    url = f'{URL_BASE}/oauth2/revokeP'
+    
+    # 모의투자와 실전투자에 따라 다른 엔드포인트 사용
+    revoke_endpoint = "oauth2/revoke" if not USE_REALTIME_API else "oauth2/revokeP"
+    url = f'{URL_BASE}/{revoke_endpoint}'
     
     try:
         logger.info("토큰 폐기 요청 중...")
@@ -260,9 +269,12 @@ def request_ws_connection_key() -> Optional[str]:
     Returns:
         str: 발급된 WebSocket 접속키, 실패 시 None
     """
-    approval_url = f"{URL_BASE}/oauth2/Approval"
+    # 모의투자와 실전투자에 따라 다른 엔드포인트 사용
+    approval_endpoint = "oauth2/Approval" if not USE_REALTIME_API else "oauth2/ApprovalP"
+    approval_url = f"{URL_BASE}/{approval_endpoint}"
+    
     headers = {"Content-Type": "application/json"}
-    body = {"grant_type": "client_credentials", "appkey": APP_KEY, "secretkey": APP_SECRET}
+    body = {"grant_type": "client_credentials", "appkey": APP_KEY, "appsecret": APP_SECRET}
     
     retry_count = 0
     max_retries = 3
@@ -351,8 +363,10 @@ def verify_token_status(token: Optional[str] = None) -> Dict[str, Any]:
     if not token:
         return {"valid": False, "error": "토큰이 없습니다."}
     
-    # 토큰 상태 확인 요청
-    status_url = f"{URL_BASE}/oauth2/tokenP/status"
+    # 모의투자와 실전투자에 따라 다른 엔드포인트 사용
+    status_endpoint = "oauth2/token/status" if not USE_REALTIME_API else "oauth2/tokenP/status"
+    status_url = f"{URL_BASE}/{status_endpoint}"
+    
     headers = {
         "content-type": "application/json",
         "Authorization": f"Bearer {token}"

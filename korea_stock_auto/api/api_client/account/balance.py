@@ -63,11 +63,12 @@ class AccountBalanceMixin:
         try:
             headers = self._get_headers(tr_id)
             
-            logger.info("계좌 잔고 조회 요청")
+            # 로그 레벨을 DEBUG로 변경하여 INFO 로그에는 출력되지 않도록 함
+            logger.debug("계좌 잔고 조회 요청")
             result = self._request_get(url, headers, params, "계좌 잔고 조회 실패")
             
             if result:
-                logger.info("계좌 잔고 조회 성공")
+                logger.debug("계좌 잔고 조회 성공")
             
             return result
             
@@ -98,28 +99,70 @@ class AccountBalanceMixin:
             return None
         
         try:
-            output1 = balance_data.get("output1", {})
-            output2 = balance_data.get("output2", [])
+            # API 응답 구조 파악 및 처리
+            # output1, output2가 리스트 또는 딕셔너리인지 확인하고 처리
+            output1 = balance_data.get("output1")
+            output2 = balance_data.get("output2")
+            
+            # 응답 구조 로깅
+            logger.info(f"output1 타입: {type(output1)}, output2 타입: {type(output2)}")
+            
+            # 계좌 정보 처리 (output1)
+            account_info = {}
+            if isinstance(output1, list) and len(output1) > 0:
+                account_info = output1[0]
+            elif isinstance(output1, dict):
+                account_info = output1
+            # output1이 비어있거나 다른 형태인 경우 output2의 첫 번째 항목 사용
+            elif isinstance(output2, list) and len(output2) > 0:
+                account_info = output2[0]
+            elif isinstance(output2, dict):
+                # output2가 리스트가 아니라 딕셔너리인 경우, 딕셔너리 자체를 사용
+                account_info = output2
+            else:
+                logger.error("API 응답 형식이 예상과 다릅니다.")
+                logger.error(f"balance_data: {balance_data}")
+                return None
+            
+            # 계좌 정보가 딕셔너리인지 확인
+            if not isinstance(account_info, dict):
+                logger.error(f"계좌 정보가 딕셔너리가 아닙니다: {type(account_info)}")
+                return None
             
             # 총액, 평가금액, 수익률 등 정보
             total_data = {
-                "dnca_tot_amt": float(output1.get("dnca_tot_amt", "0").replace(',', '')),  # 예수금총금액
-                "scts_evlu_amt": float(output1.get("scts_evlu_amt", "0").replace(',', '')),  # 유가증권평가금액
-                "tot_evlu_amt": float(output1.get("tot_evlu_amt", "0").replace(',', '')),  # 총평가금액
-                "nass_amt": float(output1.get("nass_amt", "0").replace(',', '')),  # 순자산금액
-                "pchs_amt_smtl_amt": float(output1.get("pchs_amt_smtl_amt", "0").replace(',', '')),  # 매입금액합계금액
-                "evlu_pfls_smtl_amt": float(output1.get("evlu_pfls_smtl_amt", "0").replace(',', '')),  # 평가손익합계금액
-                "evlu_pfls_rt": float(output1.get("evlu_pfls_rt", "0").replace(',', '')),  # 평가손익률
-                "total_profit_loss_rate": float(output1.get("evlu_pfls_rt", "0").replace(',', '')),  # 총수익률
-                "cash": float(output1.get("dnca_tot_amt", "0").replace(',', '')),  # 예수금총액
-                "stocks_value": float(output1.get("scts_evlu_amt", "0").replace(',', '')),  # 주식평가금액
-                "total_assets": float(output1.get("tot_evlu_amt", "0").replace(',', '')),  # 총자산
+                "dnca_tot_amt": float(account_info.get("dnca_tot_amt", "0").replace(',', '')),  # 예수금총금액
+                "scts_evlu_amt": float(account_info.get("scts_evlu_amt", "0").replace(',', '')),  # 유가증권평가금액
+                "tot_evlu_amt": float(account_info.get("tot_evlu_amt", "0").replace(',', '')),  # 총평가금액
+                "nass_amt": float(account_info.get("nass_amt", "0").replace(',', '')),  # 순자산금액
+                "pchs_amt_smtl_amt": float(account_info.get("pchs_amt_smtl_amt", "0").replace(',', '')),  # 매입금액합계금액
+                "evlu_pfls_smtl_amt": float(account_info.get("evlu_pfls_smtl_amt", "0").replace(',', '')),  # 평가손익합계금액
+                "evlu_pfls_rt": float(account_info.get("evlu_pfls_rt", "0").replace(',', '')),  # 평가손익률
+                "total_profit_loss_rate": float(account_info.get("evlu_pfls_rt", "0").replace(',', '')),  # 총수익률
+                "cash": float(account_info.get("dnca_tot_amt", "0").replace(',', '')),  # 예수금총액
+                "stocks_value": float(account_info.get("scts_evlu_amt", "0").replace(',', '')),  # 주식평가금액
+                "total_assets": float(account_info.get("tot_evlu_amt", "0").replace(',', '')),  # 총자산
             }
             
-            # 보유종목 목록
+            # 보유종목 목록 처리 (output2)
             stock_list = []
-            for stock in output2:
-                if not stock.get("pdno"):  # 종목코드가 없는 경우 건너뛰기
+            
+            # output2가 리스트인 경우 (일반적인 경우)
+            if isinstance(output2, list):
+                stock_items = output2[1:] if len(output2) > 1 else []
+            # output2가 딕셔너리인 경우 (실전투자 환경에서 응답 형식이 다를 수 있음)
+            elif isinstance(output2, dict):
+                # output2가 단일 종목 정보를 포함하는 딕셔너리인 경우
+                if output2.get("pdno"):  # 종목코드가 있는 경우
+                    stock_items = [output2]
+                else:
+                    stock_items = []
+            else:
+                stock_items = []
+                logger.warning(f"보유종목 정보 형식이 예상과 다릅니다: {type(output2)}")
+            
+            for stock in stock_items:
+                if not isinstance(stock, dict) or not stock.get("pdno"):  # 종목코드가 없는 경우 건너뛰기
                     continue
                     
                 stock_data = {
@@ -143,7 +186,7 @@ class AccountBalanceMixin:
                 "stocks": stock_list
             }
             
-            logger.info(f"주식 보유 종목 조회 성공: {len(stock_list)}종목, 총평가액: {total_data['total_assets']:,.0f}원")
+            # 로깅은 필요한 경우에만 수행 (Trader에서는 초기화 시에만)            
             return result
             
         except Exception as e:
@@ -176,20 +219,40 @@ class AccountBalanceMixin:
             return None
         
         try:
-            output1 = balance_data.get("output1", {})
+            # API 응답 구조 파악 및 처리
+            output1 = balance_data.get("output1")
+            output2 = balance_data.get("output2")
+            
+            # 계좌 정보 처리
+            account_info = {}
+            if isinstance(output1, list) and len(output1) > 0:
+                account_info = output1[0]
+            elif isinstance(output1, dict):
+                account_info = output1
+            # output1이 비어있거나 다른 형태인 경우 output2의 첫 번째 항목 사용
+            elif isinstance(output2, list) and len(output2) > 0:
+                account_info = output2[0]
+            elif isinstance(output2, dict):
+                account_info = output2
+            else:
+                logger.error("API 응답 형식이 예상과 다릅니다.")
+                logger.error(f"balance_data: {balance_data}")
+                return None
+                
+            # 계좌 정보가 딕셔너리인지 확인
+            if not isinstance(account_info, dict):
+                logger.error(f"계좌 정보가 딕셔너리가 아닙니다: {type(account_info)}")
+                return None
             
             result = {
-                "cash": float(output1.get("dnca_tot_amt", "0").replace(',', '')),  # 예수금총액
-                "stocks_value": float(output1.get("scts_evlu_amt", "0").replace(',', '')),  # 주식평가금액
-                "total_assets": float(output1.get("tot_evlu_amt", "0").replace(',', '')),  # 총자산
-                "total_profit_loss": float(output1.get("evlu_pfls_smtl_amt", "0").replace(',', '')),  # 총평가손익
-                "total_profit_loss_rate": float(output1.get("evlu_pfls_rt", "0").replace(',', '')),  # 총수익률
+                "cash": float(account_info.get("dnca_tot_amt", "0").replace(',', '')),  # 예수금총액
+                "stocks_value": float(account_info.get("scts_evlu_amt", "0").replace(',', '')),  # 주식평가금액
+                "total_assets": float(account_info.get("tot_evlu_amt", "0").replace(',', '')),  # 총자산
+                "total_profit_loss": float(account_info.get("evlu_pfls_smtl_amt", "0").replace(',', '')),  # 총평가손익
+                "total_profit_loss_rate": float(account_info.get("evlu_pfls_rt", "0").replace(',', '')),  # 총수익률
             }
             
-            logger.info(f"계좌 잔고 조회 성공: 현금={result['cash']:,.0f}원, "
-                        f"주식={result['stocks_value']:,.0f}원, "
-                        f"총평가={result['total_assets']:,.0f}원, "
-                        f"수익률={result['total_profit_loss_rate']:.2f}%")
+            # 로깅은 필요한 경우에만 수행 (Trader에서는 초기화 시에만)
             return result
             
         except Exception as e:
