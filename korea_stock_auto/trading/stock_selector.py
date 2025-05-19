@@ -7,9 +7,10 @@ import numpy as np
 import logging
 from typing import List, Dict, Any, Optional
 
-from korea_stock_auto.config import STOCK_FILTER
+from korea_stock_auto.config import STOCK_FILTER, EXCLUDE_ETF
 from korea_stock_auto.utils.utils import send_message
 from korea_stock_auto.api import KoreaInvestmentApiClient
+from korea_stock_auto.trading.technical_analyzer import TechnicalAnalyzer
 
 logger = logging.getLogger("stock_auto")
 
@@ -30,6 +31,8 @@ class StockSelector:
         self.monthly_volatility_threshold = STOCK_FILTER["monthly_volatility_threshold"]
         self.trade_volume_increase_ratio = STOCK_FILTER["trade_volume_increase_ratio"]
         self.close_price_increase_ratio = STOCK_FILTER["close_price_increase_ratio"]
+        # 기술적 분석기 초기화
+        self.tech_analyzer = TechnicalAnalyzer(api_client)
     
     def select_interest_stocks(self, target_count: int) -> List[str]:
         """
@@ -55,64 +58,96 @@ class StockSelector:
         logger.debug(f"거래량 상위 종목 {len(top_stocks)}개 조회 성공")
         send_message(f"거래량 상위 종목 {len(top_stocks)}개 조회 성공")
         
-        # top_stocks에서 종목 코드와 이름의 매핑을 생성
-        top_stock_names = {
-            stock.get("code"): stock.get("name", "N/A") 
-            for stock in top_stocks
-        }
-        
-        candidates = []
-        
+        # ETF 필터링
+        filtered_stocks = []
         for stock in top_stocks:
-            code = stock.get("code")
-            if not code:
-                continue
-
-            # 주식 기본 정보 조회 
-            info_data = self.api.get_stock_info(code)
-            if not info_data:
-                logger.debug(f"{code} 상세 정보 조회 실패")
-                continue
-
-            if isinstance(info_data, list):
-                info = info_data[0]
-            elif isinstance(info_data, dict):
-                info = info_data
-            else:
-                logger.debug(f"{code} 상세 정보 형식 오류")
-                continue
-
-            stock_name = info.get("name", "N/A")
-            if stock_name == "N/A":
-                stock_name = top_stock_names.get(code, "N/A")
-
-            try:
-                current_price = float(info.get("price", 0))
-                listed_shares = float(info.get("listed_shares", 0))
-                market_cap = current_price * listed_shares
-            except Exception as e:
-                logger.debug(f"{stock_name} ({code}) 정보 계산 오류: {e}")
-                continue
-
-            # 종목 점수 계산
-            score = self._calculate_stock_score(code, stock_name, current_price, market_cap)
+            code = stock["code"]
+            name = stock["name"]
             
-            if score >= self.score_threshold:
-                candidates.append((code, stock_name, score))
-                logger.debug(f"후보 추가: {stock_name} ({code}) - 점수: {score}")
-            else:
-                logger.debug(f"후보 탈락: {stock_name} ({code}) - 점수: {score}")
-
-        candidates.sort(key=lambda x: x[2], reverse=True)
-        selected_stocks = [code for (code, name, score) in candidates[:target_count]]
+            # ETF 종목 제외 (설정에 따라)
+            if EXCLUDE_ETF and self.api.is_etf_stock(code):
+                logger.info(f"ETF 종목 제외: {name} ({code})")
+                continue
+                
+            filtered_stocks.append(stock)
         
-        if selected_stocks:
-            stock_names = [f"{name}({code})" for code, name, _ in candidates[:target_count]]
-            send_message(f"선정된 관심 종목: {', '.join(stock_names)}")
-        else:
-            send_message("조건에 맞는 관심 종목이 없습니다.")
+        if not filtered_stocks:
+            logger.warning("ETF를 제외한 거래량 상위 종목이 없습니다.")
+            send_message("ETF를 제외한 관심 종목 없음")
+            return []
             
-        return selected_stocks
+        logger.info(f"ETF 제외 후 {len(filtered_stocks)}개 종목 선정됨")
+        send_message(f"ETF 제외 후 {len(filtered_stocks)}개 종목 선정됨")
+        
+        # 점수 계산 로직 활성화
+        scored_stocks = []
+        
+        for stock in filtered_stocks:
+            code = stock["code"]
+            name = stock["name"]
+            current_price = stock.get("price", 0)
+            market_cap = stock["market_cap"]
+            volume = stock["volume"]
+            
+            # 기본 점수
+            score = 0
+            
+            # 1. 시가총액/가격 조건
+            if market_cap > 1000000000000 and current_price > 5000:  # 1조원 이상, 5천원 이상
+                score += 1
+            
+            # 2. 거래량 조건
+            if volume > 1000000:  # 백만주 이상 거래
+                score += 1
+            
+            # 3. 이동평균선 조건
+            ma20 = self.tech_analyzer.get_moving_average(code, period=20)
+            if ma20 and current_price > ma20 * 1.01:  # 20일 이평선 1% 이상 상회
+                score += 1
+            
+            # 4. 변동성 조건
+            volatility = self.tech_analyzer.calculate_volatility(code)
+            if volatility and 0.2 <= volatility <= 0.5:  # 적정 변동성 범위
+                score += 1
+            
+            # 5. 골든 크로스 조건
+            is_golden = self.tech_analyzer.is_golden_cross(code)
+            if is_golden:
+                score += 2
+            
+            # 6. 볼린저 밴드 조건
+            bb = self.tech_analyzer.calculate_bollinger_bands(code)
+            if bb and current_price > bb["middle"] and current_price < bb["upper"]:
+                score += 1
+            
+            # 점수와 함께 저장
+            scored_stocks.append({
+                "code": code,
+                "name": name,
+                "score": score,
+                "current_price": current_price
+            })
+        
+        # 점수 기준으로 정렬
+        scored_stocks.sort(key=lambda x: x["score"], reverse=True)
+        
+        # 상위 종목 선정
+        interest_stocks = []
+        for stock in scored_stocks[:target_count]:
+            if stock["score"] >= 2:  # 최소 2점 이상인 종목만 선정
+                interest_stocks.append(stock["code"])
+                logger.debug(f"거래량 상위 종목으로 선정: {stock['name']} ({stock['code']}) - 점수: {stock['score']}")
+        
+        # 선정된 종목이 없으면 점수 상위 종목 선택
+        if not interest_stocks and scored_stocks:
+            for stock in scored_stocks[:min(target_count, len(scored_stocks))]:
+                interest_stocks.append(stock["code"])
+                logger.debug(f"거래량 상위 종목으로 선정: {stock['name']} ({stock['code']}) - 점수: {stock['score']}")
+        
+        send_message(f"관심 종목 {len(interest_stocks)}개 선정 완료")
+        logger.info(f"관심 종목 {len(interest_stocks)}개 선정 완료")
+        
+        return interest_stocks
     
     def _calculate_stock_score(self, code: str, stock_name: str, current_price: float, market_cap: float) -> int:
         """
@@ -217,6 +252,11 @@ class StockSelector:
             name = stock.get("name", "N/A")
             
             if not code:
+                continue
+            
+            # ETF 종목 제외
+            if EXCLUDE_ETF and self.api.is_etf_stock(code):
+                logger.info(f"ETF 종목 제외: {name} ({code})")
                 continue
                 
             # 주식 기본 정보 조회

@@ -119,4 +119,9 @@ STOCK_FILTER = {
     "trade_volume_increase_ratio": _cfg.get('STOCK_FILTER', {}).get('trade_volume_increase_ratio', 4.0),  # 거래량 400% 증가 조건
     "close_price_increase_ratio": _cfg.get('STOCK_FILTER', {}).get('close_price_increase_ratio', 0.05),  # 종가 5% 이상 상승 조건
     "score_threshold": _cfg.get('STOCK_FILTER', {}).get('score_threshold', 2)  # 최소 점수 기준
-} 
+}
+
+# ETF 관련 설정
+EXCLUDE_ETF = True  # ETF 종목을 관심종목에서 제외
+
+# 매매 전략 관련 설정 

@@ -8,6 +8,7 @@ import os
 import json
 import datetime
 import requests
+import time
 from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING, cast
 from pathlib import Path
 
@@ -27,6 +28,32 @@ class MarketPriceMixin:
     
     주식 현재가, 호가, 체결 정보 등 시장 가격 관련 조회 기능을 제공합니다.
     """
+    
+    def is_etf_stock(self, code: str) -> bool:
+        """
+        주어진 종목 코드가 ETF인지 여부를 확인합니다.
+        
+        Args:
+            code (str): 종목 코드
+            
+        Returns:
+            bool: ETF 여부
+            
+        Note:
+            한국 시장에서 ETF 코드는 일반적으로 다음과 같습니다:
+            - 코스피 ETF: 2xxxx, 3xxxx 등 (예: 233740, 305720)
+            - 코스닥 ETF: 4xxxx, 5xxxx 등 (예: 401170, 590080)
+            
+            이 함수는 코드의 첫 번째 숫자를 확인하여 2, 3, 4, 5로 시작하는 종목을 ETF로 간주합니다.
+        """
+        try:
+            # 일반적으로 ETF는 2xxxxx, 3xxxxx, 4xxxxx, 5xxxxx 형태의 코드를 가짐
+            if code[0] in ('2', '3', '4', '5') and len(code) == 6:
+                logger.info(f"{code} 종목은 ETF로 식별됨")
+                return True
+            return False
+        except (IndexError, TypeError):
+            return False
     
     def fetch_stock_current_price(self, code: str) -> Optional[Dict[str, Any]]:
         """
@@ -89,150 +116,6 @@ class MarketPriceMixin:
         logger.info(f"{code} 현재가 조회 성공: {price_info['current_price']}원 ({price_info['change_rate']}%)")
         return price_info
     
-    def get_stock_asking_price(self, code: str) -> Optional[Dict[str, Any]]:
-        """
-        주식 현재가 호가 조회
-        
-        한국투자증권 API를 통해 특정 종목의 호가 정보를 조회합니다.
-        
-        Args:
-            code: 종목 코드
-            
-        Returns:
-            dict or None: 주식 호가 정보 또는 조회 실패 시 None
-            
-        Notes:
-            모의투자와 실전투자 모두 지원하는 함수입니다.
-        """
-        # type hint를 위한 self 타입 지정
-        self = cast("KoreaInvestmentApiClient", self)
-        
-        path = "uapi/domestic-stock/v1/quotations/inquire-asking-price"
-        url = f"{URL_BASE}/{path}"
-        
-        params = {
-            "fid_cond_mrkt_div_code": "J",  # 시장 구분 코드: J-주식
-            "fid_input_iscd": code,         # 종목 코드
-        }
-        
-        try:
-            headers = self._get_headers("FHKST01010200")
-            
-            logger.info(f"{code} 호가 조회 요청")
-            result = self._request_get(url, headers, params, f"{code} 호가 조회 실패")
-            
-            if not result or result.get("rt_cd") != "0":
-                # API 호출 실패 시 캐시된 데이터 사용
-                logger.warning(f"API를 통한 호가 조회 실패, 캐시된 데이터 확인")
-                cache_file = self._get_cache_path(f'asking_price_{code}.json')
-                if os.path.exists(cache_file):
-                    try:
-                        with open(cache_file, 'r') as f:
-                            cached_data = json.load(f)
-                            if cached_data and isinstance(cached_data, dict):
-                                cache_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file))
-                                current_time = datetime.datetime.now()
-                                # 호가 데이터는 빠르게 변하므로 30분 이내인 경우에만 사용
-                                if (current_time - cache_time).total_seconds() < 1800:
-                                    logger.info(f"캐시된 호가 데이터 사용 (캐시 시간: {cache_time})")
-                                    return cached_data
-                                else:
-                                    logger.warning(f"캐시된 데이터가 오래됨 (캐시 시간: {cache_time})")
-                    except Exception as e:
-                        logger.error(f"캐시 파일 읽기 실패: {e}")
-                return None
-                
-            # 매도/매수 호가 정보 추출
-            output = result.get("output", {})
-            
-            # 10단계 호가 정보 정리
-            asking_prices = {
-                "stock_code": code,
-                "time": output.get("stck_bsop_hour", ""),
-                "total_ask_qty": int(output.get("total_askp_rsqn", "0").replace(',', '')),
-                "total_bid_qty": int(output.get("total_bidp_rsqn", "0").replace(',', '')),
-                "asks": [],  # 매도호가
-                "bids": [],  # 매수호가
-                "ask_prices": [],  # 매도호가 가격만
-                "bid_prices": [],  # 매수호가 가격만
-                "ask_quantities": [],  # 매도호가 수량만
-                "bid_quantities": []   # 매수호가 수량만
-            }
-            
-            # 매도호가 정보 추출 (1~10)
-            for i in range(1, 11):
-                ask_price = int(output.get(f"askp{i}", "0").replace(',', ''))
-                ask_qty = int(output.get(f"askp_rsqn{i}", "0").replace(',', ''))
-                
-                asking_prices["asks"].append({"price": ask_price, "quantity": ask_qty})
-                asking_prices["ask_prices"].append(ask_price)
-                asking_prices["ask_quantities"].append(ask_qty)
-            
-            # 매수호가 정보 추출 (1~10)
-            for i in range(1, 11):
-                bid_price = int(output.get(f"bidp{i}", "0").replace(',', ''))
-                bid_qty = int(output.get(f"bidp_rsqn{i}", "0").replace(',', ''))
-                
-                asking_prices["bids"].append({"price": bid_price, "quantity": bid_qty})
-                asking_prices["bid_prices"].append(bid_price)
-                asking_prices["bid_quantities"].append(bid_qty)
-            
-            # 최고/최저 호가
-            asking_prices["highest_ask"] = asking_prices["ask_prices"][0]
-            asking_prices["lowest_bid"] = asking_prices["bid_prices"][0]
-            
-            # 호가 스프레드
-            asking_prices["spread"] = asking_prices["highest_ask"] - asking_prices["lowest_bid"]
-            
-            # 시장 압력 지표 계산 (매수세/매도세 지표)
-            asking_prices["bid_ask_ratio"] = (sum(asking_prices["bid_quantities"]) / sum(asking_prices["ask_quantities"])) if sum(asking_prices["ask_quantities"]) > 0 else 0
-            
-            # 데이터 캐싱
-            try:
-                cache_file = self._get_cache_path(f'asking_price_{code}.json')
-                os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-                with open(cache_file, 'w') as f:
-                    json.dump(asking_prices, f)
-                logger.info(f"{code} 호가 데이터 캐싱 완료")
-            except Exception as e:
-                logger.error(f"{code} 호가 데이터 캐싱 실패: {e}")
-            
-            logger.info(f"{code} 호가 조회 성공")
-            return asking_prices
-            
-        except Exception as e:
-            logger.error(f"{code} 호가 조회 중 예외 발생: {e}", exc_info=True)
-            send_message(f"[오류] {code} 호가 조회 실패: {e}")
-            
-            # 예외 발생 시 캐시된 데이터 사용
-            logger.warning(f"API 조회 중 예외 발생, 캐시된 데이터 확인")
-            cache_file = self._get_cache_path(f'asking_price_{code}.json')
-            if os.path.exists(cache_file):
-                try:
-                    with open(cache_file, 'r') as f:
-                        cached_data = json.load(f)
-                        if cached_data and isinstance(cached_data, dict):
-                            cache_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file))
-                            current_time = datetime.datetime.now()
-                            if (current_time - cache_time).total_seconds() < 3600:  # 1시간 이내
-                                logger.info(f"캐시된 호가 데이터 사용 (캐시 시간: {cache_time})")
-                                return cached_data
-                except Exception as e:
-                    logger.error(f"캐시 파일 읽기 실패: {e}")
-            return None
-    
-    def _get_cache_path(self, filename: str) -> str:
-        """
-        캐시 파일 경로 반환
-        
-        Args:
-            filename: 캐시 파일명
-            
-        Returns:
-            str: 캐시 파일의 전체 경로
-        """
-        return os.path.join(os.path.dirname(__file__), '../../../../data/cache', filename)
-    
     def get_real_time_price_by_api(self, code: str) -> Optional[Dict[str, Any]]:
         """
         실시간 시세 조회 API (국내주식 실시간호가 통합 API 사용)
@@ -247,46 +130,36 @@ class MarketPriceMixin:
         self = cast("KoreaInvestmentApiClient", self)
         
         # 이 함수는 WebSocket 연결을 통해 실시간 데이터를 수신하는 것이 이상적입니다.
-        # 여기서는 REST API로 현재가와 호가 정보를 함께 가져와 실시간에 가까운 정보를 반환합니다.
+        # 여기서는 REST API로 현재가만 가져와 실시간에 가까운 정보를 반환합니다.
         
         # 현재가 조회 - 직접 API 호출
         try:
             # API 호출 속도 제한 적용
             self._rate_limit()
             
+            # ETF 여부에 따라 시장 구분 코드 설정
+            is_etf = self.is_etf_stock(code)
+            market_code = "E" if is_etf else "J"  # E: ETF, J: 주식
+            
             path = "uapi/domestic-stock/v1/quotations/inquire-price"
             url = f"{URL_BASE}/{path}"
             
             params = {
-                "fid_cond_mrkt_div_code": "J",
+                "fid_cond_mrkt_div_code": market_code,
                 "fid_input_iscd": code,
             }
             
             headers = self._get_headers("FHKST01010100")
             
-            logger.info(f"{code} 현재가 조회 요청")
+            logger.info(f"{code} 현재가 조회 요청 (시장구분: {market_code})")
             res = requests.get(url, headers=headers, params=params, timeout=10)
             price_result = self._handle_response(res, f"{code} 현재가 조회 실패")
             
+            # API 호출 실패 시 캐시된 데이터 사용
             if not price_result or price_result.get("rt_cd") != "0":
-                # API 호출 실패 시 캐시된 데이터 사용
-                logger.warning(f"API를 통한 현재가 조회 실패, 캐시된 데이터 확인")
-                cache_file = os.path.join(os.path.dirname(__file__), f'../../../../data/cache/price_{code}.json')
-                if os.path.exists(cache_file):
-                    try:
-                        with open(cache_file, 'r') as f:
-                            price_info = json.load(f)
-                            cache_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file))
-                            current_time = datetime.datetime.now()
-                            if (current_time - cache_time).total_seconds() < 3600:
-                                logger.info(f"캐시된 현재가 데이터 사용 (캐시 시간: {cache_time})")
-                            else:
-                                logger.warning(f"캐시된 데이터가 오래됨 (캐시 시간: {cache_time})")
-                    except Exception as e:
-                        logger.error(f"캐시 파일 읽기 실패: {e}")
-                        price_info = None
-                else:
-                    price_info = None
+                # API 호출 실패 시 None 반환 (캐시 데이터 사용하지 않음)
+                logger.warning(f"API를 통한 현재가 조회 실패, 매매를 건너뜁니다.")
+                return None
             else:
                 output = price_result.get("output", {})
                 
@@ -332,46 +205,25 @@ class MarketPriceMixin:
                 price_info["gap_from_52week_low"] = ((price_info["current_price"] - price_info["lowest_52_week"]) / 
                                                    price_info["lowest_52_week"] * 100) if price_info["lowest_52_week"] > 0 else 0
                 
-                # 데이터 캐싱
-                try:
-                    cache_dir = os.path.join(os.path.dirname(__file__), '../../../../data/cache')
-                    os.makedirs(cache_dir, exist_ok=True)
-                    cache_file = os.path.join(cache_dir, f'price_{code}.json')
-                    with open(cache_file, 'w') as f:
-                        json.dump(price_info, f)
-                    logger.info(f"{code} 현재가 데이터 캐싱 완료: {cache_file}")
-                except Exception as e:
-                    logger.error(f"{code} 현재가 데이터 캐싱 실패: {e}")
-                
+                # 데이터 캐싱 제거 - 실시간 데이터는 항상 최신 정보 사용
                 logger.info(f"{code} 현재가 조회 성공: {price_info['current_price']}원 ({price_info['change_rate']}%)")
             
-            if price_info is None:
-                logger.warning(f"{code} 실시간 시세 조회 실패: 현재가 조회 실패")
-                return None
-            
-            # 호가 조회
-            asking_price = self.get_stock_asking_price(code)
-            if asking_price is None:
-                logger.warning(f"{code} 실시간 시세 조회 실패: 호가 조회 실패")
-                # 현재가라도 있으면 반환
-                return price_info
-            
-            # 현재가와 호가 정보 통합
+            # 현재가 정보 기반으로 실시간 정보 구성 (호가 정보 없이)
             real_time_info = {
                 "stock_code": code,
                 "stock_name": price_info.get("stock_name", ""),
                 "current_price": price_info.get("current_price", 0),
                 "change_rate": price_info.get("change_rate", 0),
                 "volume": price_info.get("volume", 0),
-                "time": asking_price.get("time", ""),
-                "bid_ask_ratio": asking_price.get("bid_ask_ratio", 0),
-                "highest_ask": asking_price.get("highest_ask", 0),
-                "lowest_bid": asking_price.get("lowest_bid", 0),
-                "spread": asking_price.get("spread", 0),
-                "total_ask_qty": asking_price.get("total_ask_qty", 0),
-                "total_bid_qty": asking_price.get("total_bid_qty", 0),
-                "asks": asking_price.get("asks", []),
-                "bids": asking_price.get("bids", []),
+                "time": price_info.get("time", ""),
+                "bid_ask_ratio": 1.0,  # 기본값
+                "highest_ask": 0,
+                "lowest_bid": 0,
+                "spread": 0,
+                "total_ask_qty": 0,
+                "total_bid_qty": 0,
+                "asks": [],
+                "bids": [],
                 # 추가 정보도 포함
                 "open_price": price_info.get("open_price", 0),
                 "high_price": price_info.get("high_price", 0),
@@ -390,45 +242,23 @@ class MarketPriceMixin:
                 "highest_52_week": price_info.get("highest_52_week", 0),
                 "lowest_52_week": price_info.get("lowest_52_week", 0),
                 "gap_from_52week_high": price_info.get("gap_from_52week_high", 0),
-                "gap_from_52week_low": price_info.get("gap_from_52week_low", 0)
+                "gap_from_52week_low": price_info.get("gap_from_52week_low", 0),
+                "has_asking_price": False,  # 호가 정보 없음을 표시
+                "has_valid_data": True,    # 현재가 정보만으로도 매매에 적합한 데이터로 간주
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
             
             # 강화학습을 위한 추가 지표
-            real_time_info["market_pressure"] = real_time_info["bid_ask_ratio"] if real_time_info["bid_ask_ratio"] > 0 else 0
+            real_time_info["market_pressure"] = 1.0  # 호가 정보 없이 기본값 설정
             real_time_info["price_volatility"] = price_info.get("day_range_rate", 0)
             
-            # 데이터 캐싱
-            try:
-                cache_dir = os.path.join(os.path.dirname(__file__), '../../../../data/cache')
-                os.makedirs(cache_dir, exist_ok=True)
-                cache_file = os.path.join(cache_dir, f'realtime_{code}.json')
-                with open(cache_file, 'w') as f:
-                    json.dump(real_time_info, f)
-                logger.info(f"{code} 실시간 시세 데이터 캐싱 완료: {cache_file}")
-            except Exception as e:
-                logger.error(f"{code} 실시간 시세 데이터 캐싱 실패: {e}")
-            
-            logger.info(f"{code} 실시간 시세 조회 성공: {real_time_info['current_price']}원, 매수/매도비율: {real_time_info['bid_ask_ratio']:.2f}")
+            # 실시간 데이터 캐싱하지 않음 - 항상 최신 데이터 사용
+            logger.info(f"{code} 실시간 시세 조회 성공: {real_time_info['current_price']}원")
             return real_time_info
         
         except Exception as e:
             logger.error(f"{code} 실시간 시세 조회 실패: {e}", exc_info=True)
             send_message(f"[오류] {code} 실시간 시세 조회 실패: {e}")
             
-            # 예외 발생 시 캐시된 데이터 사용
-            logger.warning(f"API 조회 중 예외 발생, 캐시된 데이터 확인")
-            cache_file = os.path.join(os.path.dirname(__file__), f'../../../../data/cache/realtime_{code}.json')
-            if os.path.exists(cache_file):
-                try:
-                    with open(cache_file, 'r') as f:
-                        cached_data = json.load(f)
-                        cache_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file))
-                        current_time = datetime.datetime.now()
-                        # 1시간 이내인 경우에만 사용
-                        if (current_time - cache_time).total_seconds() < 3600:
-                            logger.info(f"캐시된 실시간 데이터 사용 (캐시 시간: {cache_time})")
-                            return cached_data
-                except Exception as e:
-                    logger.error(f"캐시 파일 읽기 실패: {e}")
-            
+            # 예외 상황에서는 항상 None 반환 - 캐시된 데이터 사용하지 않음
             return None 
