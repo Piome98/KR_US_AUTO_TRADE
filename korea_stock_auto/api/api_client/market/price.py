@@ -31,26 +31,72 @@ class MarketPriceMixin:
     
     def is_etf_stock(self, code: str) -> bool:
         """
-        주어진 종목 코드가 ETF인지 여부를 확인합니다.
+        종목 코드가 ETF인지 확인합니다.
         
         Args:
-            code (str): 종목 코드
+            code (str): 6자리 종목 코드
             
         Returns:
             bool: ETF 여부
             
-        Note:
-            한국 시장에서 ETF 코드는 일반적으로 다음과 같습니다:
-            - 코스피 ETF: 2xxxx, 3xxxx 등 (예: 233740, 305720)
-            - 코스닥 ETF: 4xxxx, 5xxxx 등 (예: 401170, 590080)
+        Notes:
+            대표적인 ETF 종목 코드 패턴:
+            - 일반적으로 ETF는 특정 패턴을 가집니다:
+              * KODEX 계열: 069500, 114800, 152100, 229200, 305720 등
+              * TIGER 계열: 228790, 251350, 360750, 364980 등
+              * KBSTAR, SOL 등: 270300, 466920 등
+              * 하지만 특정 패턴만으로는 정확한 구분이 어렵고
+              * 개별 주식(462870-시프트업, 272210-한화시스템 등)도 혼재
             
-            이 함수는 코드의 첫 번째 숫자를 확인하여 2, 3, 4, 5로 시작하는 종목을 ETF로 간주합니다.
+            더 정확한 방법은 API를 통해 상품구분코드를 확인하는 것이지만,
+            현재는 알려진 ETF 종목코드 리스트를 사용합니다.
         """
         try:
-            # 일반적으로 ETF는 2xxxxx, 3xxxxx, 4xxxxx, 5xxxxx 형태의 코드를 가짐
-            if code[0] in ('2', '3', '4', '5') and len(code) == 6:
+            # 알려진 ETF 종목 코드 리스트 (일부)
+            # 실제 운영 시에는 더 포괄적인 리스트나 API 조회로 대체 필요
+            known_etf_codes = {
+                # KODEX 시리즈
+                '069500',  # KODEX 200
+                '114800',  # KODEX 인버스
+                '152100',  # KODEX 레버리지
+                '229200',  # KODEX 코스닥150
+                '305720',  # KODEX 2차전지산업
+                '379800',  # KODEX 미국S&P500
+                '487230',  # KODEX 미국AI전력핵심인프라
+                
+                # TIGER 시리즈
+                '228790',  # TIGER 화장품
+                '251350',  # TIGER 코스닥150
+                '360750',  # TIGER 미국S&P500
+                '364980',  # TIGER 2차전지TOP10
+                '462010',  # TIGER 2차전지소재Fn
+                
+                # 기타 ETF
+                '270300',  # KBSTAR 코스닥150
+                '449450',  # PLUS K방산
+                '466920',  # SOL 조선TOP3플러스
+            }
+            
+            if code in known_etf_codes:
                 logger.info(f"{code} 종목은 ETF로 식별됨")
                 return True
+            
+            # 추가로 ETF일 가능성이 높은 패턴 확인 (보수적으로)
+            # 3으로 시작하는 6자리 중 특정 범위만 ETF로 간주
+            if code.startswith('3') and len(code) == 6:
+                # 30xxxx, 31xxxx 대역 중 일부만 ETF (더 보수적)
+                if code.startswith(('305', '306', '360', '364', '379')):
+                    logger.info(f"{code} 종목은 ETF 패턴으로 식별됨")
+                    return True
+            
+            # 4로 시작하는 일부 ETF 패턴 (매우 보수적)
+            if code.startswith('4') and len(code) == 6:
+                if code.startswith(('449', '462', '466', '487')):
+                    # 하지만 462870(시프트업)처럼 일반 주식도 있으므로 개별 확인 필요
+                    if code not in {'462870'}:  # 시프트업 제외
+                        logger.info(f"{code} 종목은 ETF 패턴으로 식별됨")
+                        return True
+            
             return False
         except (IndexError, TypeError):
             return False

@@ -215,22 +215,24 @@ def wait(seconds: float = 1.0, jitter: float = 0.5) -> None:
     wait_time = seconds + jitter_amount
     time.sleep(wait_time)
 
-def rate_limit_wait(client_or_base_time: Any = 0.2) -> None:
+def rate_limit_wait(client_or_base_time: Any = 2.0) -> None:
     """
-    API 레이트 리밋 방지를 위한 짧은 대기
+    API 레이트 리밋 방지를 위한 대기
     
     Args:
         client_or_base_time: 클라이언트 객체 또는 기본 대기 시간(초)
     """
     # 클라이언트 객체가 전달된 경우 기본값 사용
     if not isinstance(client_or_base_time, (int, float)):
-        base_time = 0.2
+        base_time = 2.0  # 기본 2초로 증가 (초당 거래건수 제한 회피)
     else:
         base_time = client_or_base_time
     
-    # 0.1~0.3초의 짧은 랜덤 대기
-    jitter = random.uniform(0, 0.2)
-    time.sleep(base_time + jitter)
+    # 1.0~2.0초의 랜덤 지터 추가 (더 안전한 간격)
+    jitter = random.uniform(1.0, 2.0)
+    wait_time = base_time + jitter
+    time.sleep(wait_time)
+    logger.debug(f"API 레이트 리밋 대기: {wait_time:.2f}초")
 
 def handle_http_error(response: requests.Response, error_msg_prefix: str = "API 요청 오류") -> Dict[str, Any]:
     """

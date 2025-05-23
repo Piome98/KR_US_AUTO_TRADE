@@ -5,9 +5,7 @@
 
 # 필요한 클래스들을 직접 임포트
 from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
-from korea_stock_auto.api.websocket.stock_websocket import StockWebSocket
 
 __all__ = [
     'KoreaInvestmentApiClient',
-    'StockWebSocket'
 ] 

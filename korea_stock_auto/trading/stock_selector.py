@@ -101,7 +101,7 @@ class StockSelector:
                 score += 1
             
             # 3. 이동평균선 조건
-            ma20 = self.tech_analyzer.get_moving_average(code, period=20)
+            ma20 = self.tech_analyzer.get_moving_average(code, window=20)
             if ma20 and current_price > ma20 * 1.01:  # 20일 이평선 1% 이상 상회
                 score += 1
             

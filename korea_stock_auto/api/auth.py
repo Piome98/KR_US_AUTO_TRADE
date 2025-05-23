@@ -48,8 +48,8 @@ def get_access_token(force_refresh: bool = False) -> Optional[str]:
     headers = {'content-type': 'application/json'}
     body = {'grant_type': 'client_credentials', 'appkey': APP_KEY, 'appsecret': APP_SECRET}
     
-    # 모의투자와 실전투자에 따라 다른 엔드포인트 사용
-    token_endpoint = "oauth2/token" if not USE_REALTIME_API else "oauth2/tokenP"
+    # 모의투자와 실전투자 모두 동일한 엔드포인트 사용
+    token_endpoint = "oauth2/tokenP"
     url = f'{URL_BASE}/{token_endpoint}'
     
     try:
@@ -126,8 +126,8 @@ def refresh_access_token() -> Optional[str]:
         'refresh_token': REFRESH_TOKEN
     }
     
-    # 모의투자와 실전투자에 따라 다른 엔드포인트 사용
-    token_endpoint = "oauth2/token" if not USE_REALTIME_API else "oauth2/tokenP"
+    # 모의투자와 실전투자 모두 동일한 엔드포인트 사용
+    token_endpoint = "oauth2/tokenP"
     url = f'{URL_BASE}/{token_endpoint}'
     
     try:
@@ -195,8 +195,8 @@ def revoke_token() -> bool:
     }
     body = {'appkey': APP_KEY, 'appsecret': APP_SECRET}
     
-    # 모의투자와 실전투자에 따라 다른 엔드포인트 사용
-    revoke_endpoint = "oauth2/revoke" if not USE_REALTIME_API else "oauth2/revokeP"
+    # 모의투자와 실전투자 모두 동일한 엔드포인트 사용
+    revoke_endpoint = "oauth2/revoke"
     url = f'{URL_BASE}/{revoke_endpoint}'
     
     try:
@@ -262,90 +262,6 @@ def refresh_token_if_needed() -> bool:
     logger.debug("토큰이 아직 유효함 (갱신 불필요)")
     return True
 
-def request_ws_connection_key() -> Optional[str]:
-    """
-    WebSocket 접속키 요청 함수
-    
-    Returns:
-        str: 발급된 WebSocket 접속키, 실패 시 None
-    """
-    # 모의투자와 실전투자에 따라 다른 엔드포인트 사용
-    approval_endpoint = "oauth2/Approval" if not USE_REALTIME_API else "oauth2/ApprovalP"
-    approval_url = f"{URL_BASE}/{approval_endpoint}"
-    
-    headers = {"Content-Type": "application/json"}
-    body = {"grant_type": "client_credentials", "appkey": APP_KEY, "appsecret": APP_SECRET}
-    
-    retry_count = 0
-    max_retries = 3
-    
-    while retry_count < max_retries:
-        try:
-            logger.info("WebSocket 접속키 발급 요청 중...")
-            res = requests.post(approval_url, headers=headers, json=body, timeout=10)
-            res.raise_for_status()
-            
-            ws_conn_key = res.json().get("approval_key")
-            if ws_conn_key:
-                send_message(f"WebSocket 접속키 발급 성공")
-                logger.info("WebSocket 접속키 발급 성공")
-                return ws_conn_key
-            else:
-                error_msg = "WebSocket 접속키 발급 실패: 접속키 정보 없음"
-                send_message(error_msg)
-                logger.error(error_msg)
-                
-            # 재시도 간격을 늘려가며 시도
-            retry_count += 1
-            if retry_count < max_retries:
-                wait_time = 2 ** retry_count  # 지수 백오프
-                logger.info("접속키 발급 재시도 (%d/%d)... %d초 대기", retry_count, max_retries, wait_time)
-                send_message(f"접속키 발급 재시도 ({retry_count}/{max_retries})... {wait_time}초 대기")
-                time.sleep(wait_time)
-            
-        except requests.exceptions.HTTPError as http_err:
-            error_msg = f"WebSocket 접속키 발급 HTTP 오류: {http_err}"
-            send_message(error_msg)
-            logger.error(error_msg)
-            if res and hasattr(res, 'text'):
-                logger.error("응답 내용: %s", res.text)
-                send_message(f"응답 내용: {res.text}")
-            
-            retry_count += 1
-            if retry_count < max_retries:
-                wait_time = 2 ** retry_count
-                logger.info("접속키 발급 재시도 (%d/%d)... %d초 대기", retry_count, max_retries, wait_time)
-                send_message(f"접속키 발급 재시도 ({retry_count}/{max_retries})... {wait_time}초 대기")
-                time.sleep(wait_time)
-        
-        except requests.exceptions.Timeout:
-            error_msg = "WebSocket 접속키 발급 시간 초과"
-            send_message(error_msg)
-            logger.error(error_msg)
-            
-            retry_count += 1
-            if retry_count < max_retries:
-                wait_time = 2 ** retry_count
-                logger.info("접속키 발급 재시도 (%d/%d)... %d초 대기", retry_count, max_retries, wait_time)
-                send_message(f"접속키 발급 재시도 ({retry_count}/{max_retries})... {wait_time}초 대기")
-                time.sleep(wait_time)
-                
-        except Exception as e:
-            error_msg = f"WebSocket 접속키 발급 실패: {e}"
-            send_message(error_msg)
-            logger.error(error_msg)
-            
-            retry_count += 1
-            if retry_count < max_retries:
-                wait_time = 2 ** retry_count
-                logger.info("접속키 발급 재시도 (%d/%d)... %d초 대기", retry_count, max_retries, wait_time)
-                send_message(f"접속키 발급 재시도 ({retry_count}/{max_retries})... {wait_time}초 대기")
-                time.sleep(wait_time)
-    
-    error_msg = "WebSocket 접속키 발급 최대 재시도 횟수 초과"
-    send_message(error_msg)
-    logger.error(error_msg)
-    return None
 
 def verify_token_status(token: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -363,8 +279,8 @@ def verify_token_status(token: Optional[str] = None) -> Dict[str, Any]:
     if not token:
         return {"valid": False, "error": "토큰이 없습니다."}
     
-    # 모의투자와 실전투자에 따라 다른 엔드포인트 사용
-    status_endpoint = "oauth2/token/status" if not USE_REALTIME_API else "oauth2/tokenP/status"
+    # 모의투자와 실전투자 모두 동일한 엔드포인트 사용
+    status_endpoint = "oauth2/token/status"
     status_url = f"{URL_BASE}/{status_endpoint}"
     
     headers = {

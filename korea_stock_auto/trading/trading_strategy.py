@@ -99,38 +99,22 @@ class MACDStrategy(TradingStrategy):
             bool: 매수 시그널 여부
         """
         try:
-            # 일봉 데이터 조회
-            daily_data = self.api.get_daily_data(code)
-            if not daily_data or len(daily_data) < self.macd_long + self.macd_signal:
-                logger.warning(f"{code} 일봉 데이터 부족으로 매수 시그널 확인 불가")
+            # 일봉 기준 MACD 데이터 가져오기 (TechnicalAnalyzer 사용)
+            macd_daily = self.analyzer.get_macd(code, interval='D', short_window=self.macd_short, long_window=self.macd_long, signal_window=self.macd_signal)
+
+            if not macd_daily or \
+               macd_daily.get('macd') is None or macd_daily.get('prev_macd') is None or \
+               macd_daily.get('signal') is None or macd_daily.get('prev_signal') is None or \
+               macd_daily.get('histogram') is None or macd_daily.get('prev_histogram') is None:
+                logger.warning(f"{code} 일봉 MACD 데이터 부족 또는 형식 오류로 매수 시그널 확인 불가. Data: {macd_daily}")
                 return False
-                
-            # 종가 데이터 추출
-            closes = [float(candle["stck_clpr"]) for candle in daily_data[:self.macd_long + self.macd_signal]]
-            closes.reverse()  # 최신 데이터가 앞에 오도록 순서 변경
-            
-            # 현재 MACD 계산
-            current_macd = self.analyzer.calculate_macd(
-                closes, 
-                short_period=self.macd_short, 
-                long_period=self.macd_long, 
-                signal_period=self.macd_signal
-            )
-            
-            # 이전 MACD 계산 (1일 전)
-            prev_closes = closes[1:]
-            prev_macd = self.analyzer.calculate_macd(
-                prev_closes, 
-                short_period=self.macd_short, 
-                long_period=self.macd_long, 
-                signal_period=self.macd_signal
-            )
-            
+
             # MACD 골든 크로스 확인 (MACD 라인이 시그널 라인을 상향 돌파)
-            is_golden_cross = (prev_macd["macd"] <= prev_macd["signal"]) and (current_macd["macd"] > current_macd["signal"])
+            is_golden_cross = (macd_daily['prev_macd'] <= macd_daily['prev_signal'] and 
+                               macd_daily['macd'] > macd_daily['signal'])
             
             # 추가 조건: MACD 히스토그램이 양수로 전환
-            is_histogram_positive = (prev_macd["histogram"] <= 0) and (current_macd["histogram"] > 0)
+            is_histogram_positive = (macd_daily['prev_histogram'] <= 0 and macd_daily['histogram'] > 0)
             
             # 매수 시그널
             if is_golden_cross or is_histogram_positive:
@@ -140,7 +124,7 @@ class MACDStrategy(TradingStrategy):
             return False
             
         except Exception as e:
-            logger.error(f"{code} MACD 매수 시그널 확인 중 오류 발생: {e}")
+            logger.error(f"{code} MACD 매수 시그널 확인 중 오류 발생: {e}", exc_info=True)
             return False
     
     def should_sell(self, code: str, current_price: float, entry_price: float) -> bool:
@@ -157,7 +141,7 @@ class MACDStrategy(TradingStrategy):
         """
         try:
             # 수익률 계산
-            profit_pct = ((current_price - entry_price) / entry_price) * 100
+            profit_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
             
             # 익절 조건 확인
             if profit_pct >= self.profit_target_pct:
@@ -169,38 +153,22 @@ class MACDStrategy(TradingStrategy):
                 logger.info(f"{code} 손절 조건 도달: 수익률 {profit_pct:.2f}% <= 손절선 -{self.stop_loss_pct:.2f}%")
                 return True
                 
-            # 일봉 데이터 조회
-            daily_data = self.api.get_daily_data(code)
-            if not daily_data or len(daily_data) < self.macd_long + self.macd_signal:
-                logger.warning(f"{code} 일봉 데이터 부족으로 매도 시그널 확인 불가")
+            # 일봉 기준 MACD 데이터 가져오기 (TechnicalAnalyzer 사용)
+            macd_daily = self.analyzer.get_macd(code, interval='D', short_window=self.macd_short, long_window=self.macd_long, signal_window=self.macd_signal)
+
+            if not macd_daily or \
+               macd_daily.get('macd') is None or macd_daily.get('prev_macd') is None or \
+               macd_daily.get('signal') is None or macd_daily.get('prev_signal') is None or \
+               macd_daily.get('histogram') is None or macd_daily.get('prev_histogram') is None:
+                logger.warning(f"{code} 일봉 MACD 데이터 부족 또는 형식 오류로 매도 시그널 확인 불가. Data: {macd_daily}")
                 return False
-                
-            # 종가 데이터 추출
-            closes = [float(candle["stck_clpr"]) for candle in daily_data[:self.macd_long + self.macd_signal]]
-            closes.reverse()  # 최신 데이터가 앞에 오도록 순서 변경
-            
-            # 현재 MACD 계산
-            current_macd = self.analyzer.calculate_macd(
-                closes, 
-                short_period=self.macd_short, 
-                long_period=self.macd_long, 
-                signal_period=self.macd_signal
-            )
-            
-            # 이전 MACD 계산 (1일 전)
-            prev_closes = closes[1:]
-            prev_macd = self.analyzer.calculate_macd(
-                prev_closes, 
-                short_period=self.macd_short, 
-                long_period=self.macd_long, 
-                signal_period=self.macd_signal
-            )
             
             # MACD 데드 크로스 확인 (MACD 라인이 시그널 라인을 하향 돌파)
-            is_dead_cross = (prev_macd["macd"] >= prev_macd["signal"]) and (current_macd["macd"] < current_macd["signal"])
+            is_dead_cross = (macd_daily['prev_macd'] >= macd_daily['prev_signal'] and 
+                             macd_daily['macd'] < macd_daily['signal'])
             
             # 추가 조건: MACD 히스토그램이 음수로 전환
-            is_histogram_negative = (prev_macd["histogram"] >= 0) and (current_macd["histogram"] < 0)
+            is_histogram_negative = (macd_daily['prev_histogram'] >= 0 and macd_daily['histogram'] < 0)
             
             # 매도 시그널
             if is_dead_cross or is_histogram_negative:
@@ -210,7 +178,7 @@ class MACDStrategy(TradingStrategy):
             return False
             
         except Exception as e:
-            logger.error(f"{code} MACD 매도 시그널 확인 중 오류 발생: {e}")
+            logger.error(f"{code} MACD 매도 시그널 확인 중 오류 발생: {e}", exc_info=True)
             return False
 
 
@@ -244,22 +212,24 @@ class MovingAverageStrategy(TradingStrategy):
             bool: 매수 시그널 여부
         """
         try:
-            # 골든 크로스 확인
-            is_golden = self.analyzer.is_golden_cross(code, self.short_period, self.long_period)
-            if is_golden:
-                logger.info(f"{code} 이동평균선 골든크로스 매수 시그널 발생")
-                return True
-                
-            # 현재가와 이동평균선 비교
-            ma_long = self.analyzer.get_moving_average(code, self.long_period)
-            if ma_long and current_price > ma_long * 1.01:  # 1% 이상 상회
-                logger.info(f"{code} 현재가({current_price})가 {self.long_period}일 이동평균선({ma_long:.2f})을 1% 이상 상회")
-                return True
-                
-            return False
+            # 골든 크로스 확인 (TechnicalAnalyzer 사용)
+            is_golden = self.analyzer.check_ma_golden_cross(code, interval='D', short_period=self.short_period, long_period=self.long_period)
             
+            if is_golden is None: # 데이터 부족 등으로 판단 불가
+                logger.warning(f"{code} 이동평균선 골든크로스 확인 불가 (데이터 부족 등)")
+                return False
+
+            if is_golden:
+                # 추가 조건: 현재 가격이 장기 이동평균선 위에 있는지 확인
+                long_ma = self.analyzer.get_moving_average(code, interval='D', window=self.long_period)
+                if long_ma is not None and current_price > long_ma:
+                    logger.info(f"{code} 이동평균선 골든크로스 매수 시그널 발생 (현재가: {current_price}, {self.long_period}일선: {long_ma:.2f})")
+                    return True
+                else:
+                    logger.info(f"{code} 골든크로스 발생했으나 현재가가 {self.long_period}일선 아래 ({current_price} <= {long_ma if long_ma else 'N/A'})")
+            return False
         except Exception as e:
-            logger.error(f"{code} 이동평균선 매수 시그널 확인 중 오류 발생: {e}")
+            logger.error(f"{code} 이동평균선 매수 시그널 확인 중 오류 발생: {e}", exc_info=True)
             return False
     
     def should_sell(self, code: str, current_price: float, entry_price: float) -> bool:
@@ -276,7 +246,7 @@ class MovingAverageStrategy(TradingStrategy):
         """
         try:
             # 수익률 계산
-            profit_pct = ((current_price - entry_price) / entry_price) * 100
+            profit_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
             
             # 익절 조건 확인
             if profit_pct >= self.profit_target_pct:
@@ -287,17 +257,25 @@ class MovingAverageStrategy(TradingStrategy):
             if profit_pct <= -self.stop_loss_pct:
                 logger.info(f"{code} 손절 조건 도달: 수익률 {profit_pct:.2f}% <= 손절선 -{self.stop_loss_pct:.2f}%")
                 return True
-            
-            # 현재가와 이동평균선 비교
-            ma_short = self.analyzer.get_moving_average(code, self.short_period)
-            if ma_short and current_price < ma_short * 0.99:  # 1% 이상 하회
-                logger.info(f"{code} 현재가({current_price})가 {self.short_period}일 이동평균선({ma_short:.2f})을 1% 이상 하회")
-                return True
                 
+            # 데드 크로스 확인 (TechnicalAnalyzer 사용)
+            is_dead = self.analyzer.check_ma_dead_cross(code, interval='D', short_period=self.short_period, long_period=self.long_period)
+
+            if is_dead is None: # 데이터 부족 등으로 판단 불가
+                logger.warning(f"{code} 이동평균선 데드크로스 확인 불가 (데이터 부족 등)")
+                return False
+
+            if is_dead:
+                # 추가 조건: 현재 가격이 장기 이동평균선 아래에 있는지 확인
+                long_ma = self.analyzer.get_moving_average(code, interval='D', window=self.long_period)
+                if long_ma is not None and current_price < long_ma:
+                    logger.info(f"{code} 이동평균선 데드크로스 매도 시그널 발생 (현재가: {current_price}, {self.long_period}일선: {long_ma:.2f})")
+                    return True
+                else:
+                    logger.info(f"{code} 데드크로스 발생했으나 현재가가 {self.long_period}일선 위 ({current_price} >= {long_ma if long_ma else 'N/A'})")
             return False
-            
         except Exception as e:
-            logger.error(f"{code} 이동평균선 매도 시그널 확인 중 오류 발생: {e}")
+            logger.error(f"{code} 이동평균선 매도 시그널 확인 중 오류 발생: {e}", exc_info=True)
             return False
 
 
@@ -322,7 +300,7 @@ class RSIStrategy(TradingStrategy):
     
     def should_buy(self, code: str, current_price: float) -> bool:
         """
-        RSI 매수 시그널 확인
+        RSI 매수 시그널 확인 (과매도 구간 진입 후 탈출 시)
         
         Args:
             code: 종목 코드
@@ -332,25 +310,28 @@ class RSIStrategy(TradingStrategy):
             bool: 매수 시그널 여부
         """
         try:
-            # RSI 계산
-            rsi = self.analyzer.calculate_rsi(code, self.rsi_period)
-            if rsi is None:
+            # 일봉 기준 RSI 데이터 가져오기 (TechnicalAnalyzer 사용)
+            rsi_data = self.analyzer.get_rsi_values(code, interval='D', window=self.rsi_period) 
+
+            if not rsi_data or rsi_data.get('current_rsi') is None or rsi_data.get('prev_rsi') is None:
+                logger.warning(f"{code} 일봉 RSI 데이터 부족으로 매수 시그널 확인 불가. Data: {rsi_data}")
                 return False
-                
-            # 과매도 상태에서 반등 시 매수
-            if rsi <= self.rsi_oversold:
-                logger.info(f"{code} RSI({rsi:.2f}) 과매도 상태로 매수 시그널 발생")
-                return True
-                
-            return False
             
-        except Exception as e:
-            logger.error(f"{code} RSI 매수 시그널 확인 중 오류 발생: {e}")
+            current_rsi = rsi_data['current_rsi']
+            prev_rsi = rsi_data['prev_rsi']
+
+            # 과매도 구간(예: 30) 진입 후, 해당 구간을 상향 돌파할 때 매수
+            if prev_rsi < self.rsi_oversold and current_rsi >= self.rsi_oversold:
+                logger.info(f"{code} RSI 과매도 탈출 매수 시그널: 현재 RSI ({current_rsi:.2f}) >= 과매도 기준 ({self.rsi_oversold}), 이전 RSI ({prev_rsi:.2f})")
+                return True
             return False
-    
+        except Exception as e:
+            logger.error(f"{code} RSI 매수 시그널 확인 중 오류 발생: {e}", exc_info=True)
+            return False
+
     def should_sell(self, code: str, current_price: float, entry_price: float) -> bool:
         """
-        RSI 매도 시그널 확인
+        RSI 매도 시그널 확인 (과매수 구간 진입 후 탈출 시)
         
         Args:
             code: 종목 코드
@@ -362,7 +343,7 @@ class RSIStrategy(TradingStrategy):
         """
         try:
             # 수익률 계산
-            profit_pct = ((current_price - entry_price) / entry_price) * 100
+            profit_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
             
             # 익절 조건 확인
             if profit_pct >= self.profit_target_pct:
@@ -373,19 +354,22 @@ class RSIStrategy(TradingStrategy):
             if profit_pct <= -self.stop_loss_pct:
                 logger.info(f"{code} 손절 조건 도달: 수익률 {profit_pct:.2f}% <= 손절선 -{self.stop_loss_pct:.2f}%")
                 return True
-                
-            # RSI 계산
-            rsi = self.analyzer.calculate_rsi(code, self.rsi_period)
-            if rsi is None:
+
+            # 일봉 기준 RSI 데이터 가져오기 (TechnicalAnalyzer 사용)
+            rsi_data = self.analyzer.get_rsi_values(code, interval='D', window=self.rsi_period)
+
+            if not rsi_data or rsi_data.get('current_rsi') is None or rsi_data.get('prev_rsi') is None:
+                logger.warning(f"{code} 일봉 RSI 데이터 부족으로 매도 시그널 확인 불가. Data: {rsi_data}")
                 return False
-                
-            # 과매수 상태에서 매도
-            if rsi >= self.rsi_overbought:
-                logger.info(f"{code} RSI({rsi:.2f}) 과매수 상태로 매도 시그널 발생")
-                return True
-                
-            return False
             
+            current_rsi = rsi_data['current_rsi']
+            prev_rsi = rsi_data['prev_rsi']
+            
+            # 과매수 구간(예: 70) 진입 후, 해당 구간을 하향 돌파할 때 매도
+            if prev_rsi > self.rsi_overbought and current_rsi <= self.rsi_overbought:
+                logger.info(f"{code} RSI 과매수 탈출 매도 시그널: 현재 RSI ({current_rsi:.2f}) <= 과매수 기준 ({self.rsi_overbought}), 이전 RSI ({prev_rsi:.2f})")
+                return True
+            return False
         except Exception as e:
-            logger.error(f"{code} RSI 매도 시그널 확인 중 오류 발생: {e}")
+            logger.error(f"{code} RSI 매도 시그널 확인 중 오류 발생: {e}", exc_info=True)
             return False 

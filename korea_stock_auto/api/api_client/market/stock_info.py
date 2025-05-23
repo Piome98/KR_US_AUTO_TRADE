@@ -51,7 +51,9 @@ class StockInfoMixin:
         
         params = {
             "FID_COND_MRKT_DIV_CODE": "J",  # 시장 구분 코드: J-주식
-            "FID_INPUT_ISCD": code          # 종목 코드
+            "FID_INPUT_ISCD": code,         # 종목 코드
+            "PDNO": code,                   # 종목 코드 (필수 파라미터)
+            "PRDT_TYPE_CD": "300"           # 상품 유형 코드 (필수 파라미터) - 주식:300
         }
         
         try:

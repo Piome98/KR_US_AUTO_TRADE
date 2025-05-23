@@ -16,6 +16,7 @@ from korea_stock_auto.trading.trade_executor import TradeExecutor
 from korea_stock_auto.trading.risk_manager import RiskManager
 from korea_stock_auto.trading.trading_strategy import TradingStrategy, MACDStrategy, MovingAverageStrategy, RSIStrategy
 
+
 logger = logging.getLogger("stock_auto")
 
 class Trader:
@@ -27,15 +28,22 @@ class Trader:
         self.api = KoreaInvestmentApiClient()
         
         # 거래 상태 변수
-        self.bought_list = []  # 매수한 종목 리스트
-        self.symbol_list = []  # 관심 종목 리스트
-        self.total_cash = 0    # 총 현금
-        self.stock_dict = {}   # 보유 종목 정보
-        self.entry_prices = {} # 종목별 매수 가격
-        self.buy_amount = 0    # 종목별 매수 금액
-        self.buy_percentage = TRADE_CONFIG.get("buy_percentage", 0.2)  # 매수 비율 (기본: 현금의 20%)
-        self.target_buy_count = TRADE_CONFIG.get("target_buy_count", 5)  # 목표 매수 종목 수
-        self.soldout = False   # 전량 매도 여부
+        self.bought_list: List[str] = []  # 매수한 종목 리스트
+        self.symbol_list: List[str] = []  # 관심 종목 리스트
+        self.total_cash: float = 0    # 총 현금
+        self.stock_dict: Dict[str, Dict[str, Any]] = {}   # 보유 종목 정보
+        self.entry_prices: Dict[str, float] = {} # 종목별 매수 가격
+        self.buy_amount: float = 0    # 종목별 매수 금액
+        self.buy_percentage: float = TRADE_CONFIG.get("buy_percentage", 0.2)  # 매수 비율 (기본: 현금의 20%)
+        self.target_buy_count: int = TRADE_CONFIG.get("target_buy_count", 5)  # 목표 매수 종목 수
+        self.soldout: bool = False   # 전량 매도 여부
+        
+        # API 호출 기반 데이터 관리
+        self.current_prices: Dict[str, Dict[str, Any]] = {} # 종목 코드 키, {'price': 현재가, 'volume': 거래량, 'timestamp': ...}
+        self.last_market_data_fetch_time: float = 0.0
+        self.market_data_fetch_interval: int = 300  # 5분 (300초)
+        self.last_strategy_run_time: float = 0.0 # 마지막 전략 실행 시간 (중복 실행 방지용)
+        self.strategy_run_interval: int = 60 # 전략 실행 최소 간격 (초)
         
         # 먼저 필요한 컴포넌트들 생성
         # 기술적 분석기 생성
@@ -50,6 +58,10 @@ class Trader:
         # 종목 선택기 생성
         self.selector = StockSelector(self.api)
         
+        
+        # 호가 데이터 보관용 딕셔너리
+        # self.quote_data = {}
+        
         # 전략 생성 - analyzer를 사용하므로 analyzer 초기화 후에 생성
         strategy_type = TRADE_CONFIG.get("strategy", "ma")
         self.strategy = self._create_strategy(strategy_type)
@@ -57,6 +69,7 @@ class Trader:
         # 계좌 정보 업데이트 주기 (초)
         self.account_update_interval = 60  # 1분
         self.last_account_update_time = 0
+        
         
         # 초기화
         self.initialize_trading()
@@ -98,6 +111,8 @@ class Trader:
         
         # 위험 관리 초기화
         self.risk_manager.reset_daily_stats()
+        
+        # 웹소켓 관련 코드 제거 - 관심종목 선정 후 별도 함수에서 처리
         
         logger.info(f"트레이딩 초기화 완료: 현금 {self.total_cash:,}원, 보유 종목 {len(self.bought_list)}개")
         send_message(f"[초기화 완료] 현금: {self.total_cash:,}원, 보유 종목: {len(self.bought_list)}개")
@@ -144,6 +159,7 @@ class Trader:
                            f"수익률={balance_info['total_profit_loss_rate']:.2f}%")
         else:
             logger.warning("계좌 잔고 정보 조회 실패")
+            self.total_cash = 0  # 기본값 설정
             
         # 보유 종목 정보 업데이트
         if stock_balance:
@@ -162,7 +178,10 @@ class Trader:
                 
                 if is_init:
                     logger.info(f"보유 종목 {len(self.bought_list)}개 정보 업데이트 완료")
-                    logger.info(f"주식 보유 종목 조회 성공: {len(self.bought_list)}종목, 총평가액: {balance_info['total_assets']:,.0f}원")
+                    if balance_info and 'total_assets' in balance_info:
+                        logger.info(f"주식 보유 종목 조회 성공: {len(self.bought_list)}종목, 총평가액: {balance_info['total_assets']:,.0f}원")
+                    else:
+                        logger.info(f"주식 보유 종목 조회 성공: {len(self.bought_list)}종목, 총평가액: 조회 실패")
             else:
                 logger.warning("보유 종목 정보 형식이 예상과 다릅니다.")
                 # 응답 형식 로깅
@@ -172,6 +191,58 @@ class Trader:
         
         self.last_account_update_time = current_time
     
+    def _fetch_and_process_market_data(self):
+        """5분 간격으로 시장 데이터를 가져오고 처리합니다."""
+        current_time = time.time()
+        if current_time - self.last_market_data_fetch_time < self.market_data_fetch_interval:
+            return # 아직 5분이 지나지 않았으면 반환
+
+        logger.info("주기적 시장 데이터 업데이트 시작 (5분 간격)...")
+        self.last_market_data_fetch_time = current_time
+
+        target_symbols_to_fetch = list(set(self.symbol_list + self.bought_list))
+        if not target_symbols_to_fetch:
+            logger.info("데이터를 가져올 관심/보유 종목이 없습니다.")
+            return
+
+        for code in target_symbols_to_fetch:
+            try:
+                # 1. 현재가 조회 (API 호출)
+                price_data = self.api.get_current_price(code) # API에 해당 메소드 필요
+                if price_data and isinstance(price_data, dict) and 'current_price' in price_data:
+                    current_price = int(price_data['current_price'])
+                    self.current_prices[code] = {
+                        'price': current_price,
+                        'bid': int(price_data.get('lowest_bid', 0)), # 매수호가
+                        'ask': int(price_data.get('highest_ask', 0)), # 매도호가
+                        'volume': int(price_data.get('volume', 0)), # 누적거래량
+                        'timestamp': current_time
+                    }
+                    logger.debug(f"{code} 현재가 업데이트: {current_price}")
+                else:
+                    logger.warning(f"{code} 현재가 정보 조회 실패 또는 형식 오류: {price_data}")
+                    if code in self.current_prices: # 이전 데이터가 있다면 유지, 없다면 초기화
+                        pass 
+                    else:
+                        self.current_prices[code] = {'price': 0, 'timestamp': current_time} # 오류 시 가격 0으로 초기화
+
+                # 2. 5분봉 데이터 조회 및 기술적 지표 업데이트 (TechnicalAnalyzer 사용)
+                # TechnicalAnalyzer가 내부적으로 API 호출하고 지표 계산/저장하도록 구현되어 있다고 가정
+                self.analyzer.update_symbol_data(code, interval='5') # 5분봉 데이터 업데이트
+                self.analyzer.update_symbol_data(code, interval='D') # 일봉 데이터도 주기적으로 업데이트
+                
+                # 필요한 경우, 업데이트된 지표를 로깅하거나 self.strategy에 직접 전달할 준비
+                # 예: rsi_5min = self.analyzer.get_rsi(code, interval='5')
+                #     macd_daily, macdsignal_daily, _ = self.analyzer.get_macd(code, interval='D') 
+                #     logger.debug(f"{code} - 5분봉 RSI: {rsi_5min}, 일봉 MACD: {macd_daily}, Signal: {macdsignal_daily}")
+
+            except Exception as e:
+                logger.error(f"{code} 종목 데이터 처리 중 오류: {e}", exc_info=True)
+                if code not in self.current_prices: # 오류 발생 시 해당 종목 데이터 초기화
+                     self.current_prices[code] = {'price': 0, 'timestamp': current_time}
+        
+        logger.info("주기적 시장 데이터 업데이트 완료.")
+
     def select_interest_stocks(self):
         """
         관심 종목 선정
@@ -184,6 +255,7 @@ class Trader:
         if self.symbol_list:
             logger.info(f"관심 종목 {len(self.symbol_list)}개 선정 완료")
             send_message(f"[관심 종목] {len(self.symbol_list)}개 선정 완료")
+            
         else:
             logger.warning("관심 종목 선정 실패")
             send_message("[주의] 관심 종목 선정 실패")
@@ -191,328 +263,347 @@ class Trader:
         return self.symbol_list
     
     def try_buy(self, code: str):
-        """
-        종목 매수 시도
-        
-        Args:
-            code: 종목 코드
-            
-        Returns:
-            bool: 매수 성공 여부
-        """
+        """지정된 종목 매수 시도"""
         if code in self.bought_list:
-            logger.info(f"{code} 이미 보유 중인 종목")
-            return False
-            
-        # 현재가 조회
-        current_price_info = self.api.fetch_stock_current_price(code)
-        if not current_price_info:
-            logger.warning(f"{code} 현재가 조회 실패")
-            return False
-            
-        current_price = current_price_info.get("current_price", 0)
-        if current_price <= 0:
-            logger.warning(f"{code} 유효하지 않은 현재가: {current_price}")
-            return False
-            
-        # 매수 시그널 확인
-        if not self.strategy.should_buy(code, current_price):
-            logger.info(f"{code} 매수 시그널 없음")
-            return False
-            
-        # 매수 가능 수량 계산
-        quantity = self.executor.calculate_buy_quantity(current_price, self.buy_amount)
-        if quantity <= 0:
-            logger.warning(f"{code} 매수 가능 수량 없음")
-            return False
-            
-        # 노출 한도 확인
-        if self.risk_manager.check_exposure_limit(code, quantity, current_price):
-            logger.warning(f"{code} 노출 한도 초과로 매수 제한")
-            return False
-            
-        # 매수 실행
-        result = self.executor.execute_buy(code, current_price, quantity)
+            logger.info(f"{code} 종목은 이미 보유 중입니다. 추가 매수하지 않습니다.")
+            return
+
+        if len(self.bought_list) >= self.target_buy_count:
+            logger.info(f"목표 보유 종목 수({self.target_buy_count}개)에 도달하여 신규 매수하지 않습니다.")
+            return
         
-        if result.get("success", False):
-            # 매수 성공 처리
-            self.bought_list.append(code)
-            self.entry_prices[code] = current_price
+        current_price_info = self.current_prices.get(code)
+        if not current_price_info or not current_price_info.get('price'):
+            logger.warning(f"{code} 종목의 현재가 정보가 없어 매수 시도 불가.")
+            return
+        
+        current_price = current_price_info['price']
+
+        # 매수 조건 확인 (TradingStrategy 사용)
+        # generate_signal은 (종목코드, 현재가격정보, 기술적분석기) 등을 받아 매수/매도/보류 신호 반환 가정
+        buy_signal = self.strategy.should_buy(code, current_price) # current_price_info 대신 current_price 전달
+
+        if buy_signal:
+            # 매수 금액 결정 (가용 현금의 일정 비율 또는 고정 금액 등)
+            # self.buy_amount는 __init__에서 self.total_cash * self.buy_percentage 로 설정됨
+            order_cash = min(self.buy_amount, self.total_cash) # 실제 주문 가능 금액
+            if order_cash < TRADE_CONFIG.get("min_order_amount", 10000): # 최소 주문 금액 확인
+                logger.info(f"{code} 매수 주문 금액({order_cash:,.0f}원)이 최소 주문 금액 미만입니다.")
+                return
             
-            # 계좌 정보 업데이트
-            self._update_account_info()
-            
-            # 위험 관리 업데이트
-            self.risk_manager.update_daily_pl()
-            
-            return True
-        else:
-            logger.warning(f"{code} 매수 실패: {result.get('message', '알 수 없는 오류')}")
-            return False
-    
+            # 리스크 관리 (예: 최대 투자 비중 등) - TradeExecutor 내부 또는 여기서 확인 가능
+            if not self.risk_manager.can_buy(code, order_cash, self.total_cash, len(self.bought_list)):
+                logger.info(f"{code} 리스크 관리 조건에 따라 매수 보류.")
+                return
+
+            # 매수 실행 (TradeExecutor 사용)
+            success, order_details = self.executor.place_order(code, "buy", current_price, order_cash=order_cash)
+            if success:
+                self.bought_list.append(code)
+                self.entry_prices[code] = current_price # 단순화된 매수가 기록 (평균 매수가로 변경 필요)
+                # self._update_account_info() # 매수 성공 시 즉시 계좌 정보 업데이트 (API 호출 부하 고려)
+                logger.info(f"{code} 매수 주문 성공: {order_details}")
+                send_message(f"[매수 성공] {code} 가격: {current_price:,} ({order_details.get('quantity',0)}주)")
+            else:
+                logger.error(f"{code} 매수 주문 실패: {order_details}")
+                send_message(f"[매수 실패] {code} 가격: {current_price:,} ({order_details})")
+        else: # not buy_signal
+            logger.info(f"{code} 매수 보류 신호 수신 (should_buy 결과 False).")
+        # else (sell 신호는 여기서 처리 안함)
+
     def try_sell(self, code: str):
-        """
-        종목 매도 시도
-        
-        Args:
-            code: 종목 코드
-            
-        Returns:
-            bool: 매도 성공 여부
-        """
+        """지정된 종목 매도 시도"""
         if code not in self.bought_list:
-            logger.warning(f"{code} 보유하지 않은 종목")
-            return False
-            
-        # 보유 수량 확인
-        quantity = self.stock_dict.get(code, {}).get("units", 0)
-        if quantity <= 0:
-            logger.warning(f"{code} 보유 수량 없음")
-            return False
-            
-        # 현재가 조회
-        current_price_info = self.api.fetch_stock_current_price(code)
-        if not current_price_info:
-            logger.warning(f"{code} 현재가 조회 실패")
-            return False
-            
-        current_price = current_price_info.get("current_price", 0)
-        if current_price <= 0:
-            logger.warning(f"{code} 유효하지 않은 현재가: {current_price}")
-            return False
-            
-        # 매수가 확인
+            logger.warning(f"{code} 종목을 보유하고 있지 않아 매도할 수 없습니다.")
+            return
+
+        current_price_info = self.current_prices.get(code)
+        if not current_price_info or not current_price_info.get('price'):
+            logger.warning(f"{code} 종목의 현재가 정보가 없어 매도 시도 불가.")
+            return
+        
+        current_price = current_price_info['price']
         entry_price = self.entry_prices.get(code, 0)
-        
-        # 매도 시그널 확인
-        should_sell = False
-        
-        # 1. 전략 기반 매도 시그널
-        if self.strategy.should_sell(code, current_price, entry_price):
-            logger.info(f"{code} 전략 기반 매도 시그널 발생")
-            should_sell = True
-            
-        # 2. 트레일링 스탑
-        elif self.risk_manager.check_trailing_stop(code, current_price):
-            logger.info(f"{code} 트레일링 스탑 매도 시그널 발생")
-            should_sell = True
-            
-        # 3. 손실 제한
-        elif self.risk_manager.check_position_loss_limit(code, current_price, entry_price):
-            logger.info(f"{code} 손실 제한 매도 시그널 발생")
-            should_sell = True
-            
-        if not should_sell:
-            logger.info(f"{code} 매도 시그널 없음")
-            return False
-            
-        # 매도 실행
-        result = self.executor.execute_sell(code, current_price, quantity)
-        
-        if result.get("success", False):
-            # 매도 성공 처리
-            self.bought_list.remove(code)
-            if code in self.entry_prices:
-                del self.entry_prices[code]
-                
-            # 계좌 정보 업데이트
-            self._update_account_info()
-            
-            # 위험 관리 업데이트
-            self.risk_manager.update_daily_pl()
-            
-            return True
+
+        # 매도 조건 확인 (TradingStrategy 사용 + RiskManager의 손절/익절 조건)
+        # 1. 리스크 관리 조건 우선 확인 (손절/익절)
+        if self.risk_manager.check_stop_loss(code, current_price, entry_price):
+            logger.info(f"{code} 손절 조건 충족. 매도 시도. 현재가: {current_price}, 매수가: {entry_price}")
+            signal = "sell" # 리스크 관리 매도 신호
+        elif self.risk_manager.check_take_profit(code, current_price, entry_price):
+            logger.info(f"{code} 익절 조건 충족. 매도 시도. 현재가: {current_price}, 매수가: {entry_price}")
+            signal = "sell" # 리스크 관리 매도 신호
         else:
-            logger.warning(f"{code} 매도 실패: {result.get('message', '알 수 없는 오류')}")
-            return False
-    
+            # 2. 전략 기반 매도 신호 확인
+            sell_signal = self.strategy.should_sell(code, current_price, entry_price)
+            if sell_signal:
+                signal = "sell"
+            else:
+                signal = "hold" # should_sell이 False이면 hold로 간주
+
+        if signal == "sell":
+            stock_info = self.stock_dict.get(code, {})
+            quantity_to_sell = 0
+            if isinstance(stock_info, dict):
+                quantity_to_sell = stock_info.get("hldg_qty", 0) # 보유수량 (API 응답 필드명 확인 필요)
+            
+            if quantity_to_sell <= 0:
+                logger.warning(f"{code} 매도 가능 수량이 없습니다. ({stock_info})")
+                return
+
+            # 매도 실행 (TradeExecutor 사용)
+            success, order_details = self.executor.place_order(code, "sell", current_price, quantity=quantity_to_sell)
+            if success:
+                if code in self.bought_list: # 정상적으로 매도 처리된 경우 bought_list에서 제거
+                    self.bought_list.remove(code)
+                if code in self.entry_prices:
+                    del self.entry_prices[code]
+                # self._update_account_info() # 매도 성공 시 즉시 계좌 정보 업데이트 (API 호출 부하 고려)
+                logger.info(f"{code} 매도 주문 성공: {order_details}")
+                send_message(f"[매도 성공] {code} 가격: {current_price:,} ({quantity_to_sell}주)")
+            else:
+                logger.error(f"{code} 매도 주문 실패: {order_details}")
+                send_message(f"[매도 실패] {code} 가격: {current_price:,} ({order_details})")
+        elif signal == "hold":
+            logger.info(f"{code} 매도 보류 신호 수신 (should_sell 결과 False 또는 리스크 관리 조건 미충족).")
+        # else (buy 신호는 여기서 처리 안함)
+
     def sell_all_stocks(self):
         """
-        모든 보유 주식 매도
+        모든 보유 종목 매도
         
         Returns:
-            bool: 전체 매도 성공 여부
+            bool: 모든 종목 매도 성공 여부
         """
-        # 보유 종목이 없으면 종료
         if not self.bought_list:
             logger.info("매도할 보유 종목이 없습니다.")
             return True
             
-        # 전체 매도 실행
-        results = self.executor.sell_all_stocks(self.stock_dict)
+        logger.info(f"모든 보유 종목 매도 시작 ({len(self.bought_list)}개)")
+        send_message(f"[전량 매도] {len(self.bought_list)}개 종목 매도 시작")
         
-        # 결과 처리
-        success_count = sum(results.values())
-        if success_count == len(results):
-            # 모든 종목 매도 성공
-            self.bought_list = []
-            self.entry_prices = {}
-            self.soldout = True
+        success_count = 0
+        fail_list = []
+        
+        for code in list(self.bought_list):  # 복사본으로 순회 (매도 시 원본 리스트가 변경되므로)
+            stock_info = self.stock_dict.get(code, {})
+            name = "N/A"
+            quantity = 0
             
-            # 계좌 정보 업데이트
-            self._update_account_info()
+            if isinstance(stock_info, dict):
+                name = stock_info.get("prdt_name", code)
+                quantity = stock_info.get("hldg_qty", 0) 
             
-            # 위험 관리 업데이트
-            self.risk_manager.update_daily_pl()
+            if quantity <= 0:
+                logger.warning(f"{code}({name}) 보유 수량이 없음")
+                continue
+                
+            # 현재가 정보 확인 (self.current_prices 우선 활용)
+            current_price = 0
+            current_price_data = self.current_prices.get(code)
+            if current_price_data and isinstance(current_price_data, dict) and current_price_data.get('price', 0) > 0:
+                current_price = current_price_data['price']
+                logger.info(f"{code} ({name}) - current_prices 데이터 활용 - 현재가: {current_price}")
+            else: # current_prices에 없거나 유효하지 않으면 API 직접 조회
+                logger.info(f"{code} ({name}) - current_prices에 유효한 가격 정보 없음. API로 현재가 조회 시도.")
+                price_data_api = self.api.get_current_price(code) # API에 해당 메소드 필요
+                if price_data_api and isinstance(price_data_api, dict) and 'stck_prpr' in price_data_api:
+                    try:
+                        current_price = int(price_data_api['stck_prpr'])
+                        if current_price <= 0:
+                            logger.warning(f"{code} ({name}) API 조회 현재가가 0 이하: {current_price}. 매도 주문 불가.")
+                            fail_list.append(f"{code}({name}) - 현재가 0 이하")
+                            continue
+                        logger.info(f"{code} ({name}) - API 직접 조회 활용 - 현재가: {current_price}")
+                    except ValueError:
+                        logger.warning(f"{code} ({name}) API 조회 현재가 변환 오류: {price_data_api['stck_prpr']}. 매도 주문 불가.")
+                        fail_list.append(f"{code}({name}) - 현재가 변환오류")
+                        continue
+                else:
+                    logger.warning(f"{code} ({name}) API 현재가 조회 실패. 매도 주문 불가. Response: {price_data_api}")
+                    fail_list.append(f"{code}({name}) - 현재가 API 조회실패")
+                    continue 
             
-            logger.info("모든 보유 주식 매도 성공")
-            return True
-        else:
-            # 일부 종목 매도 실패
-            logger.warning(f"일부 종목 매도 실패: 성공 {success_count}/{len(results)}")
+            # 시장가 매도 (TradeExecutor 사용)
+            # self.executor.place_order는 (종목코드, 주문유형, 가격, 수량, 주문타입) 등을 인자로 받는다고 가정
+            success, order_details = self.executor.place_order(code, "sell", current_price, quantity=quantity, order_type="시장가") 
             
-            # 성공한 종목 처리
-            for code, success in results.items():
-                if success and code in self.bought_list:
+            if success:
+                logger.info(f"{code}({name}) 매도 주문 성공: {quantity}주")
+                success_count += 1
+                
+                # 매도 성공한 종목 목록에서 제거
+                if code in self.bought_list:
                     self.bought_list.remove(code)
-                    if code in self.entry_prices:
-                        del self.entry_prices[code]
-            
-            # 계좌 정보 업데이트
-            self._update_account_info()
-            
-            # 위험 관리 업데이트
-            self.risk_manager.update_daily_pl()
-            
-            return False
+                if code in self.entry_prices:
+                    del self.entry_prices[code]
+                if code in self.stock_dict:
+                    del self.stock_dict[code]
+            else:
+                logger.error(f"{code}({name}) 매도 실패: {order_details}")
+                fail_list.append(f"{code}({name})")
+        
+        # 계좌 정보 업데이트
+        self._update_account_info()
+        
+        # 위험 관리 업데이트
+        self.risk_manager.update_daily_pl()
+        
+        # 결과 로깅
+        result_msg = f"전량 매도 결과: {success_count}개 성공"
+        if fail_list:
+            result_msg += f", {len(fail_list)}개 실패 ({', '.join(fail_list)})"
+        
+        logger.info(result_msg)
+        send_message(result_msg)
+        
+        return len(fail_list) == 0
     
     def run_single_trading_cycle(self):
-        """
-        단일 매매 사이클 실행
+        """단일 매매 사이클 실행"""
+        current_time = time.time()
+        logger.info("단일 매매 사이클 시작...")
+        send_message("단일 매매 사이클 시작")
+
+        # 1. 계좌 정보 업데이트 (주기적으로)
+        self._update_account_info()
+
+        # 2. 시장 데이터 업데이트 (5분 간격)
+        self._fetch_and_process_market_data()
+
+        # 3. 매매 전략 실행 (너무 자주 실행되지 않도록 제어)
+        if current_time - self.last_strategy_run_time < self.strategy_run_interval:
+            logger.info(f"최근 전략 실행 후 {self.strategy_run_interval}초가 지나지 않아 이번 사이클은 건너뜁니다.")
+            return
         
-        Returns:
-            bool: 매매 사이클 성공 여부
-        """
-        try:
-            logger.info("매매 사이클 시작")
-            
-            # 위험 수준 확인
-            if self.risk_manager.should_stop_trading():
-                logger.warning("위험 수준으로 인해 매매 중단")
-                self.sell_all_stocks()
-                return False
-                
-            # 관심 종목 선정 (아직 선정되지 않은 경우)
-            if not self.symbol_list:
-                self.select_interest_stocks()
-                
-            if not self.symbol_list:
-                logger.warning("관심 종목이 없어 매매 사이클 중단")
-                return False
-                
-            # 보유 종목 매도 검토
-            for code in list(self.bought_list):  # 복사본으로 반복 (매도 시 리스트 변경됨)
-                self.try_sell(code)
-                time.sleep(1)  # API 호출 간격 유지
-                
-            # 매수 가능 종목 수 계산
-            available_slots = self.target_buy_count - len(self.bought_list)
-            
-            # 매수 가능한 경우 매수 시도
-            if available_slots > 0 and self.total_cash >= self.buy_amount:
-                # 아직 매수하지 않은 관심 종목에 대해 매수 시도
-                for code in self.symbol_list:
-                    if code not in self.bought_list:
-                        if self.try_buy(code):
-                            available_slots -= 1
-                            
-                        time.sleep(1)  # API 호출 간격 유지
-                        
-                        # 매수 가능 종목 수 또는 현금 소진 시 중단
-                        if available_slots <= 0 or self.total_cash < self.buy_amount:
-                            break
-            
-            # 위험 관리 업데이트
-            self.risk_manager.update_daily_pl()
-            
-            logger.info("매매 사이클 완료")
-            return True
-            
-        except Exception as e:
-            logger.error(f"매매 사이클 중 오류 발생: {e}")
-            send_message(f"[오류] 매매 사이클 중 오류 발생: {e}")
-            return False
-    
+        self.last_strategy_run_time = current_time
+
+        # 3.1. 관심 종목 선정 (필요시, 예: 하루 한 번 또는 특정 조건 만족 시)
+        # 현재는 매 사이클마다 실행하지 않고, 필요시 외부에서 호출하거나 초기화 시 실행
+        if not self.symbol_list: # 관심 종목이 없으면 선정 시도
+            logger.info("관심 종목이 없어 선정을 시도합니다.")
+            self.select_interest_stocks()
+            # 관심종목 선정 후에는 바로 데이터를 가져오도록 호출 (다음 5분 주기까지 기다리지 않음)
+            if self.symbol_list:
+                 self.last_market_data_fetch_time = 0 # 강제 업데이트 유도
+                 self._fetch_and_process_market_data()
+
+        # 3.2. 매수 로직: 관심 종목 중 매수 조건 충족 시 매수 시도
+        logger.info(f"매수 대상 종목 탐색 시작... 관심 종목 수: {len(self.symbol_list)}")
+        if len(self.bought_list) < self.target_buy_count and self.total_cash >= TRADE_CONFIG.get("min_order_amount", 10000):
+            for code in self.symbol_list:
+                if code not in self.bought_list: # 이미 보유한 종목은 매수 시도 안 함
+                    logger.debug(f"{code} 매수 조건 확인 중...")
+                    self.try_buy(code) # try_buy 내부에서 signal 확인 후 주문
+                    if len(self.bought_list) >= self.target_buy_count:
+                        logger.info("목표 보유 종목 수에 도달하여 추가 매수 중단.")
+                        break # 목표 보유 수 도달 시 매수 중단
+        else:
+            if len(self.bought_list) >= self.target_buy_count:
+                logger.info(f"이미 목표 보유 종목 수({self.target_buy_count}개)를 보유 중입니다.")
+            if self.total_cash < TRADE_CONFIG.get("min_order_amount", 10000):
+                logger.info(f"매수 가능 금액({self.total_cash:,.0f}원)이 최소 주문 금액 미만입니다.")
+
+        # 3.3. 매도 로직: 보유 종목 중 매도 조건 충족 시 매도 시도
+        logger.info(f"매도 대상 종목 탐색 시작... 보유 종목 수: {len(self.bought_list)}")
+        if not self.bought_list:
+            logger.info("보유 종목이 없어 매도를 진행하지 않습니다.")
+        else:
+            # bought_list를 복사하여 반복 (매도 성공 시 bought_list에서 제거되기 때문)
+            for code in list(self.bought_list):
+                logger.debug(f"{code} 매도 조건 확인 중...")
+                self.try_sell(code) # try_sell 내부에서 signal 확인 후 주문
+        
+        # 4. 포트폴리오 현황 로깅
+        self.log_portfolio_status()
+        logger.info("단일 매매 사이클 종료.")
+
     def run_trading(self, max_cycles: int = 0):
         """
-        매매 실행
+        자동 매매 실행
         
         Args:
-            max_cycles: 최대 매매 사이클 수 (0: 무한)
+            max_cycles: 최대 거래 사이클 수 (0이면 무제한)
         """
         try:
-            logger.info(f"매매 시작 (전략: {self.strategy.get_strategy_name()})")
-            send_message(f"[매매 시작] 전략: {self.strategy.get_strategy_name()}")
+            # 1. 거래 초기화 (액세스 토큰 발급 및 계좌 정보 확인)
+            logger.info("1. 트레이딩 초기화 시작 (액세스 토큰 발급 및 계좌 정보 확인)")
+            self.initialize_trading()
             
+            # 2. 관심 종목 선정
+            send_message("관심 종목 선정 시작")
+            self.select_interest_stocks()
+            
+            # 3. 웹소켓 관련 로직 전체 제거
+            logger.info("API 호출 기반으로 거래를 진행합니다.")
+            send_message("[정보] API 호출 기반으로 거래를 진행합니다.")
+            
+            # 4. 매매 사이클 시작
+            logger.info("4. 매매 사이클 시작")
             cycle_count = 0
+            self.soldout = False
             
             while True:
-                # 최대 사이클 수 확인
-                if max_cycles > 0 and cycle_count >= max_cycles:
-                    logger.info(f"최대 사이클 수({max_cycles}) 도달로 매매 종료")
-                    break
-                    
-                # 단일 매매 사이클 실행
-                success = self.run_single_trading_cycle()
                 cycle_count += 1
                 
-                # 매매 사이클 결과 출력
-                logger.info(f"매매 사이클 {cycle_count} 완료: {'성공' if success else '실패'}")
-                send_message(f"[매매 사이클 {cycle_count}] {'성공' if success else '실패'}")
-                
-                # 위험 수준 확인
-                if self.risk_manager.should_stop_trading():
-                    logger.warning("위험 수준으로 인해 매매 종료")
-                    send_message("[매매 종료] 위험 수준 도달로 인한 종료")
+                if max_cycles > 0 and cycle_count > max_cycles:
+                    logger.info(f"최대 거래 사이클 수({max_cycles}) 도달")
                     break
                     
-                # 대기
-                wait_time = TRADE_CONFIG.get("cycle_interval", 300)  # 기본 5분
-                logger.info(f"{wait_time}초 대기 후 다음 사이클 시작")
-                time.sleep(wait_time)
+                logger.info(f"===== 거래 사이클 {cycle_count} 시작 =====")
                 
-            # 매매 종료 처리
-            self._finalize_trading()
-            
+                # 단일 거래 사이클 실행
+                self.run_single_trading_cycle()
+                
+                logger.info(f"===== 거래 사이클 {cycle_count} 종료 =====")
+                logger.info(f"보유 종목: {len(self.bought_list)}개, 관심 종목: {len(self.symbol_list)}개, 잔고: {self.total_cash:,.0f}원")
+                
+                # 다음 사이클까지 대기
+                logger.info("다음 거래 사이클까지 대기...")
+                time.sleep(60)  # 60초 대기
+                
+        except KeyboardInterrupt:
+            logger.info("사용자에 의한 거래 중단")
         except Exception as e:
-            logger.error(f"매매 실행 중 오류 발생: {e}")
-            send_message(f"[오류] 매매 실행 중 오류 발생: {e}")
+            logger.error(f"거래 실행 중 오류 발생: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            send_message(f"[오류] 거래 실행 중 오류 발생: {e}")
+        finally:
+            # 정리 작업
             self._finalize_trading()
     
-    def _finalize_trading(self):
-        """매매 종료 처리"""
-        # 최종 자산 계산
-        final_assets = self.risk_manager.calculate_total_assets()
-        initial_assets = self.risk_manager.initial_total_assets
-        
-        # 수익률 계산
-        profit = final_assets - initial_assets
-        profit_rate = (profit / initial_assets) * 100 if initial_assets > 0 else 0
-        
-        # 결과 출력
-        logger.info(f"매매 종료: 최종 자산 {final_assets:,}원 (수익: {profit:,}원, {profit_rate:.2f}%)")
-        send_message(f"[매매 종료] 최종 자산: {final_assets:,}원 (수익: {profit:,}원, {profit_rate:.2f}%)")
-        
-        # 보유 종목 정보 출력
-        if self.bought_list:
-            stock_info = []
-            for code in self.bought_list:
-                try:
-                    stock_data = self.stock_dict.get(code, {})
-                    if not isinstance(stock_data, dict):
-                        logger.warning(f"{code} 종목 정보가 딕셔너리가 아닙니다: {type(stock_data)}")
-                        continue
-                    
-                    name = stock_data.get("prdt_name", "N/A")
-                    qty = stock_data.get("units", 0)
-                    current_price = stock_data.get("current_price", 0)
-                    entry_price = self.entry_prices.get(code, 0)
-                    profit_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
-                    
-                    stock_info.append(f"{name}({code}): {qty}주, {profit_pct:.2f}%")
-                except Exception as e:
-                    logger.error(f"{code} 종목 정보 처리 중 오류 발생: {e}")
-                
-            send_message(f"[보유 종목] {', '.join(stock_info)}")
+    def log_portfolio_status(self):
+        """현재 포트폴리오 상태를 로깅합니다."""
+        logger.info("===== 포트폴리오 현황 =====")
+        logger.info(f"총 현금: {self.total_cash:,.0f}원")
+        logger.info(f"보유 종목 수: {len(self.bought_list)} / {self.target_buy_count}")
+        total_stock_value = 0
+        if not self.bought_list:
+            logger.info("보유 종목 없음")
         else:
-            send_message("[보유 종목] 없음") 
+            for code in self.bought_list:
+                stock_info = self.stock_dict.get(code, {})
+                current_price = self.current_prices.get(code, {}).get('price', 0)
+                quantity = stock_info.get("hldg_qty", 0)
+                avg_buy_price = self.entry_prices.get(code, stock_info.get("pchs_avg_pric", 0)) # API 필드명 확인 필요
+                eval_value = current_price * quantity
+                profit_loss = (current_price - avg_buy_price) * quantity if avg_buy_price > 0 else 0
+                profit_loss_rate = (profit_loss / (avg_buy_price * quantity)) * 100 if avg_buy_price > 0 and quantity > 0 else 0
+                total_stock_value += eval_value
+                logger.info(f"  - {stock_info.get('prdt_name', code)} ({code}): {quantity}주, 현재가 {current_price:,}, 평가액 {eval_value:,.0f}, 수익률 {profit_loss_rate:.2f}% (매수가: {avg_buy_price:,})")
+        
+        total_assets = self.total_cash + total_stock_value
+        logger.info(f"총 주식 평가액: {total_stock_value:,.0f}원")
+        logger.info(f"총 자산 평가액: {total_assets:,.0f}원")
+        initial_assets = self.risk_manager.initial_total_assets
+        if initial_assets > 0:
+            overall_profit_loss_rate = ((total_assets - initial_assets) / initial_assets) * 100
+            logger.info(f"전체 수익률 (초기 자산 대비): {overall_profit_loss_rate:.2f}%")
+        logger.info("===========================")
+
+    def _finalize_trading(self):
+        """거래 종료 정리"""
+        
+        logger.info("자동 매매 정리 작업 완료")
+        send_message("[자동 매매] 종료") 

@@ -118,6 +118,11 @@ class ChartDataMixin:
                 logger.warning(f"{code} {period_name} 데이터가 없습니다.")
                 return []
             
+            # 응답 구조 확인을 위한 로깅 추가
+            if output2 and len(output2) > 0:
+                logger.info(f"{code} {period_name} 첫 번째 데이터 항목 키: {list(output2[0].keys())}")
+                logger.info(f"{code} {period_name} 첫 번째 데이터 항목 값: {output2[0]}")
+            
             # 결과 가공
             chart_data = []
             for item in output2:
