@@ -24,6 +24,9 @@ from korea_stock_auto.api.auth import (
     get_access_token, refresh_token_if_needed, 
     is_token_valid, verify_token_status
 )
+from korea_stock_auto.api.api_client.market.historical_price import HistoricalPriceMixin
+from korea_stock_auto.api.api_client.market.price import MarketPriceMixin
+from korea_stock_auto.api.api_client.order.stock import StockOrderMixin
 
 # 로깅 설정
 logger = logging.getLogger("stock_auto")
@@ -33,7 +36,7 @@ T = TypeVar('T')
 ResponseDict = Dict[str, Any]
 
 # 클래스 정의를 먼저 하고 나중에 Mixin 클래스들을 적용
-class KoreaInvestmentApiClient:
+class KoreaInvestmentApiClient(HistoricalPriceMixin, MarketPriceMixin, StockOrderMixin):
     """
     한국투자증권 API 클라이언트
     
@@ -51,6 +54,11 @@ class KoreaInvestmentApiClient:
         self.token_expired_at: Optional[datetime] = None
         self.last_request_time: float = 0
         self.request_interval: float = 0.1  # 최소 API 호출 간격(초)
+        
+        # HistoricalPriceMixin에서 필요한 속성들
+        self.base_url = URL_BASE
+        self.app_key = APP_KEY
+        self.app_secret = APP_SECRET
         
         # 액세스 토큰 발급
         self.issue_access_token()
@@ -120,8 +128,8 @@ class KoreaInvestmentApiClient:
             
         headers = {
             "authorization": f"Bearer {self.access_token}",
-            "appKey": APP_KEY,
-            "appSecret": APP_SECRET,
+            "appkey": APP_KEY,
+            "appsecret": APP_SECRET,
             "tr_id": tr_id,
             "custtype": "P",
             "content-type": "application/json; charset=utf-8"
@@ -222,13 +230,31 @@ class KoreaInvestmentApiClient:
         response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
         return self._handle_response(response, error_msg)
 
+    # Trader 클래스에서 호출하는 get_current_price 메소드 추가
+    # 실제 로직은 MarketPriceMixin의 get_real_time_price_by_api를 사용
+    def get_current_price(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        특정 종목의 현재가 정보를 조회합니다. (get_real_time_price_by_api의 별칭)
+        
+        Args:
+            stock_code: 종목 코드
+            
+        Returns:
+            dict or None: 현재가 정보 또는 조회 실패 시 None
+        """
+        # MarketPriceMixin에 해당 메소드가 동적으로 추가되므로, static analyzer는 찾지 못할 수 있음
+        # hasattr를 사용하여 안전하게 호출하거나, Mixin 적용 방식에 따라 직접 호출 가능
+        if hasattr(self, 'get_real_time_price_by_api'):
+            return self.get_real_time_price_by_api(stock_code)
+        else:
+            logger.error("'get_real_time_price_by_api' 메소드를 찾을 수 없습니다. Mixin이 올바르게 적용되었는지 확인하세요.")
+            return None
+
 # 클래스 정의 후에 Mixin 클래스들을 임포트하고 적용
 from korea_stock_auto.api.api_client.account.balance import AccountBalanceMixin
 from korea_stock_auto.api.api_client.account.deposit import AccountDepositMixin
 from korea_stock_auto.api.api_client.market.stock_info import StockInfoMixin
-from korea_stock_auto.api.api_client.market.price import MarketPriceMixin
 from korea_stock_auto.api.api_client.market.chart import ChartDataMixin
-from korea_stock_auto.api.api_client.order.stock import StockOrderMixin
 from korea_stock_auto.api.api_client.order.status import OrderStatusMixin
 from korea_stock_auto.api.api_client.sector.index import SectorIndexMixin
 from korea_stock_auto.api.api_client.sector.info import SectorInfoMixin
@@ -238,7 +264,6 @@ for mixin in [
     AccountBalanceMixin, 
     AccountDepositMixin,
     StockInfoMixin,
-    MarketPriceMixin,
     ChartDataMixin,
     StockOrderMixin,
     OrderStatusMixin,
