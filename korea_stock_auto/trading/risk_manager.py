@@ -289,5 +289,4 @@ class RiskManager:
         self.risk_level = "NORMAL"
         self.position_max_prices = {}
         
-        logger.info(f"일일 통계 초기화 완료. 초기 자산: {self.initial_total_assets:,}원")
-        send_message(f"[일일 초기화] 트레이딩 통계가 초기화되었습니다. 초기 자산: {self.initial_total_assets:,}원") 
+        logger.info(f"일일 통계 초기화 완료. 초기 자산: {self.initial_total_assets:,}원") 

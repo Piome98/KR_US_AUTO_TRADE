@@ -6,10 +6,12 @@
 import numpy as np
 import pandas as pd
 import logging
+import time
 from typing import List, Dict, Any, Optional, Tuple, Union
 
 from korea_stock_auto.api import KoreaInvestmentApiClient
 from korea_stock_auto.utils.utils import send_message
+from korea_stock_auto.data.hybrid_data_collector import HybridDataCollector
 import talib
 
 logger = logging.getLogger("stock_auto")
@@ -27,6 +29,13 @@ class TechnicalAnalyzer:
             api_client: API 클라이언트 인스턴스
         """
         self.api = api_client
+        # 하이브리드 데이터 수집기 초기화 (API + 네이버 크롤러)
+        self.data_collector = HybridDataCollector(
+            api_client=self.api,  # 기존 API 클라이언트 재사용
+            use_database=False,   # 데이터베이스 비활성화 (속도 우선)
+            api_delay=0.1,        # API 호출 간 지연시간
+            crawler_delay=0.5     # 크롤러 요청 간 지연시간
+        )
         # 각 심볼별, 인터벌별 데이터를 저장하는 딕셔너리
         self.symbol_data_cache: Dict[str, Dict[str, Dict[str, Any]]] = {} 
         # 예시: {'005930': {'D': {'ohlcv': df, 'rsi': rsi_series, 'macd': macd_df, ...}}}
@@ -34,129 +43,130 @@ class TechnicalAnalyzer:
     def _fetch_ohlcv(self, symbol: str, interval: str = 'D', limit: int = 200) -> Optional[pd.DataFrame]:
         """
         지정된 종목 및 간격으로 OHLCV 데이터를 가져옵니다.
+        하이브리드 데이터 수집기를 사용하여 API + 네이버 크롤러 데이터를 통합합니다.
         interval: 'D' (일봉), 'W' (주봉), 'M' (월봉), 숫자 (분봉, 예: '1', '5', '60')
         """
         logger.debug(f"Fetching OHLCV for {symbol}, interval {interval}, limit {limit}")
+        
         try:
-            # 한국투자증권 API는 일/주/월봉과 분봉 API가 다름
-            if interval in ['D', 'W', 'M']: # 일봉, 주봉, 월봉
-                # 일봉 데이터 조회 API 호출
-                # df = self.api.get_daily_ohlcv_data(symbol, interval=interval, limit=limit) # 가정
-                # df = load_sample_data() # 임시 테스트용
-                # return df.sort_index()
+            # 분봉 데이터는 API만 사용 (실시간성 중요)
+            if interval.isdigit():
+                return self._fetch_intraday_data(symbol, interval, limit)
+            
+            # 일봉/주봉/월봉은 하이브리드 데이터 수집기 사용
+            period_map = {'D': 'day', 'W': 'week', 'M': 'month'}
+            period = period_map.get(interval, 'day')
+            
+            logger.info(f"하이브리드 데이터 수집 시작: {symbol}, {period}, {limit}개")
+            
+            # 하이브리드 데이터 수집 (API + 네이버 크롤러)
+            df = self.data_collector.get_stock_data(
+                code=symbol,
+                period=period,
+                count=limit,
+                strategy="hybrid"  # API 우선, 부족시 크롤러 보완
+            )
+            
+            if df is not None and not df.empty:
+                # 데이터 정규화 및 검증
+                df = self._normalize_dataframe(df, symbol)
+                logger.info(f"하이브리드 데이터 수집 성공: {symbol}, {len(df)}개")
                 
-                # ---- 실제 API 호출 예시 (korea_investment_api.py 에 유사 함수 필요) ----
-                ohlcv_list = self.api.get_daily_stock_chart_data(symbol, period_div_code=interval.upper(), limit=limit)
-                if not ohlcv_list:
-                    logger.warning(f"No OHLCV data fetched for {symbol} interval {interval}.")
-                    return None
-
-                df = pd.DataFrame(ohlcv_list)
-                if df.empty:
-                    return None
-                
-                # API 응답에 따라 컬럼명 매핑 (예시, 실제 API 응답 확인 후 조정)
-                # 'stck_bsop_date' -> 'date'
-                # 'stck_oprc' -> 'open'
-                # 'stck_hgpr' -> 'high'
-                # 'stck_lwpr' -> 'low'
-                # 'stck_clpr' -> 'close'
-                # 'acml_vol' -> 'volume'
-                rename_map = {
-                    'stck_bsop_date': 'date', 'stck_oprc': 'open', 'stck_hgpr': 'high',
-                    'stck_lwpr': 'low', 'stck_clpr': 'close', 'acml_vol': 'volume',
-                    # 분봉의 경우 필드명이 다를 수 있음: 'stck_cntg_hour', 'stck_prpr', 'cntg_vol' 등
-                    'stck_cntg_hour': 'time', # 분봉 시간
-                }
-                df.rename(columns=rename_map, inplace=True)
-
-                if 'date' in df.columns:
-                    df['date'] = pd.to_datetime(df['date'])
-                    df.set_index('date', inplace=True)
-                elif 'time' in df.columns and interval.isdigit(): # 분봉 데이터 처리
-                    # 분봉의 경우 날짜와 시간을 조합해야 할 수 있음. API 응답 형식에 따라 처리.
-                    # 여기서는 'time' 컬럼이 'HHMMSS' 형식이라고 가정
-                    # 실제로는 날짜 정보도 함께 받아와야 완전한 datetime 인덱스 생성 가능
-                    # df['datetime'] = pd.to_datetime(df['date_from_api_or_today'] + ' ' + df['time'])
-                    # df.set_index('datetime', inplace=True)
-                    pass # 분봉 datetime 처리 필요
-
-                # 필요한 컬럼만 선택하고 숫자형으로 변환
-                ohlcv_cols = ['open', 'high', 'low', 'close', 'volume']
-                for col in ohlcv_cols:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                    else: # API 응답에 해당 컬럼이 없을 경우
-                        logger.warning(f"Column {col} not found in OHLCV data for {symbol}")
-                        df[col] = 0 # 또는 다른 적절한 값으로 채우거나, 오류 처리
-                
-                df.dropna(subset=ohlcv_cols, inplace=True) # 필수 컬럼에 NaN이 있으면 해당 행 제거
-                return df.sort_index()
-
-            elif interval.isdigit(): # 분봉 데이터
-                # 분봉 데이터 조회 API 호출
-                # df = self.api.get_intraday_ohlcv_data(symbol, interval=interval, limit=limit) # 가정
-                # 위와 유사하게 DataFrame으로 변환 및 전처리
-                logger.warning(f"Intraday OHLCV for interval '{interval}' not yet fully implemented for fetching.")
-                # 임시로 None 반환
-                # ---- 실제 API 호출 예시 (korea_investment_api.py 에 유사 함수 필요) ----
-                ohlcv_list = self.api.get_intraday_minute_chart_data(symbol, time_interval=interval, limit_count=limit)
-                if not ohlcv_list:
-                    logger.warning(f"No Intraday OHLCV data fetched for {symbol} interval {interval}.")
-                    return None
-                df = pd.DataFrame(ohlcv_list)
-                # ... (일봉과 유사한 전처리) ...
-                # 분봉의 경우 시간(stck_cntg_hour)과 현재가(stck_prpr), 거래량(cntg_vol) 등을 사용
-                # 시고저종이 없을 수 있으므로, 현재가를 시고저종으로 사용하거나, OHLC를 만들어야 함.
-                # 여기서는 API가 OHLC를 제공한다고 가정하거나, 현재가만 사용한다고 가정.
-                # 현재는 위 일봉 처리 로직에 분봉 시간 처리 부분이 일부 포함됨.
-                rename_map = {
-                    'stck_bsop_date': 'date', 'stck_oprc': 'open', 'stck_hgpr': 'high',
-                    'stck_lwpr': 'low', 'stck_clpr': 'close', 'acml_vol': 'volume',
-                    'stck_cntg_hour': 'time', # 분봉 시간
-                    'stck_prpr': 'close', # 분봉에서는 현재가를 종가로 주로 사용
-                    'cntg_vol': 'volume'
-                }
-                df.rename(columns=rename_map, inplace=True)
-
-                if 'date' in df.columns and 'time' in df.columns: # 날짜와 시간이 모두 있는 경우
-                     # 시간 형식에 따라 HHMMSS 또는 HHMM 등으로 올 수 있음
-                    df['datetime_str'] = df['date'].astype(str) + df['time'].astype(str).str.zfill(6) # 예: 20231027090000
-                    df['datetime'] = pd.to_datetime(df['datetime_str'], format='%Y%m%d%H%M%S')
-                    df.set_index('datetime', inplace=True)
-                elif 'time' in df.columns: # 시간만 있는 경우 (날짜는 당일로 가정 - API에 따라 다름)
-                    # 이 경우는 API가 당일 분봉만 제공하고 날짜 정보가 없을 때
-                    # df['datetime'] = pd.to_datetime(pd.Timestamp('today').strftime('%Y-%m-%d') + ' ' + df['time'].astype(str).str.zfill(6), format='%Y-%m-%d %H%M%S')
-                    # df.set_index('datetime', inplace=True)
-                    logger.warning(" 분봉 데이터에 날짜 정보가 없어 정확한 datetime 인덱스 생성이 어려울 수 있습니다.")
-                    # 임시로 시간 인덱스만 사용하거나, 오류 처리 필요
-                    df.set_index('time', inplace=True) # 임시
-
-                ohlcv_cols = ['open', 'high', 'low', 'close', 'volume']
-                for col in ohlcv_cols:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                    else:
-                        if col == 'close' and 'stck_prpr' in df.columns: # 현재가를 종가로
-                             df['close'] = pd.to_numeric(df['stck_prpr'], errors='coerce')
-                        elif col == 'volume' and 'cntg_vol' in df.columns:
-                             df['volume'] = pd.to_numeric(df['cntg_vol'], errors='coerce')
-                        else:
-                            logger.warning(f"Column {col} not found in Intraday OHLCV data for {symbol}")
-                            df[col] = 0
-                # 분봉에서 시고저가 없는 경우 종가로 채우기 (근사치)
-                if 'open' not in df.columns and 'close' in df.columns: df['open'] = df['close']
-                if 'high' not in df.columns and 'close' in df.columns: df['high'] = df['close']
-                if 'low' not in df.columns and 'close' in df.columns: df['low'] = df['close']
-                
-                df.dropna(subset=ohlcv_cols, inplace=True)
-                return df.sort_index()
+                # API 호출 간 지연 (과도한 요청 방지)
+                time.sleep(0.1)
+                return df
             else:
-                logger.error(f"Unsupported interval type: {interval}")
+                logger.warning(f"하이브리드 데이터 수집 실패: {symbol}")
                 return None
+                
         except Exception as e:
             logger.error(f"Error fetching OHLCV for {symbol} interval {interval}: {e}", exc_info=True)
             return None
+    
+    def _fetch_intraday_data(self, symbol: str, interval: str, limit: int) -> Optional[pd.DataFrame]:
+        """
+        분봉 데이터는 API에서만 수집 (실시간성 중요)
+        """
+        try:
+            # 불필요한 warning 제거 - 5분봉 데이터 수집은 정상 작동함
+            # logger.warning(f"Intraday OHLCV for interval '{interval}' not yet fully implemented for fetching.")
+            
+            # API 호출
+            ohlcv_list = self.api.get_intraday_minute_chart_data(symbol, time_interval=interval, limit_count=limit)
+            if not ohlcv_list:
+                logger.warning(f"No Intraday OHLCV data fetched for {symbol} interval {interval}.")
+                return None
+                
+            df = pd.DataFrame(ohlcv_list)
+            if df.empty:
+                return None
+            
+            # 컬럼명 매핑
+            rename_map = {
+                'stck_bsop_date': 'date', 'stck_oprc': 'open', 'stck_hgpr': 'high',
+                'stck_lwpr': 'low', 'stck_clpr': 'close', 'acml_vol': 'volume',
+                'stck_cntg_hour': 'time', 'stck_prpr': 'close', 'cntg_vol': 'volume'
+            }
+            df.rename(columns=rename_map, inplace=True)
+
+            # 시간 인덱스 처리
+            if 'date' in df.columns and 'time' in df.columns:
+                df['datetime_str'] = df['date'].astype(str) + df['time'].astype(str).str.zfill(6)
+                df['datetime'] = pd.to_datetime(df['datetime_str'], format='%Y%m%d%H%M%S')
+                df.set_index('datetime', inplace=True)
+            elif 'time' in df.columns:
+                df.set_index('time', inplace=True)
+
+            # 데이터 정규화
+            df = self._normalize_dataframe(df, symbol)
+            
+            # API 호출 간 지연
+            time.sleep(0.1)
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error fetching intraday data for {symbol}: {e}", exc_info=True)
+            return None
+    
+    def _normalize_dataframe(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+        """
+        DataFrame 정규화 및 검증
+        """
+        try:
+            # 필요한 컬럼 확인 및 변환
+            ohlcv_cols = ['open', 'high', 'low', 'close', 'volume']
+            
+            for col in ohlcv_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                else:
+                    logger.warning(f"Column {col} not found in data for {symbol}")
+                    if col == 'volume':
+                        df[col] = 0
+                    else:
+                        # OHLC가 없으면 close 값으로 대체
+                        if 'close' in df.columns:
+                            df[col] = df['close']
+                        else:
+                            df[col] = 0
+            
+            # NaN 값 제거
+            df.dropna(subset=ohlcv_cols, inplace=True)
+            
+            # 인덱스가 날짜가 아닌 경우 처리
+            if not isinstance(df.index, pd.DatetimeIndex):
+                if 'date' in df.columns:
+                    df['date'] = pd.to_datetime(df['date'])
+                    df.set_index('date', inplace=True)
+            
+            # 최신 데이터부터 정렬
+            df = df.sort_index(ascending=False)
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error normalizing dataframe for {symbol}: {e}", exc_info=True)
+            return df
 
     def _get_cached_ohlcv(self, symbol: str, interval: str) -> Optional[pd.DataFrame]:
         """캐시된 OHLCV 데이터를 반환합니다."""
@@ -171,6 +181,125 @@ class TechnicalAnalyzer:
         self.symbol_data_cache[symbol][interval]['ohlcv'] = df
         logger.debug(f"OHLCV cache updated for {symbol} interval {interval}. Shape: {df.shape}")
 
+    def _calculate_rsi(self, df: pd.DataFrame, window: int = 14) -> Optional[pd.Series]:
+        """RSI 계산"""
+        try:
+            if 'close' not in df.columns or len(df) < window:
+                return None
+            close_prices = df['close'].dropna()
+            if len(close_prices) < window:
+                return None
+            return talib.RSI(close_prices, timeperiod=window)
+        except Exception as e:
+            logger.error(f"Error calculating RSI: {e}")
+            return None
+    
+    def _calculate_macd(self, df: pd.DataFrame, short_window: int = 12, long_window: int = 26, signal_window: int = 9) -> Optional[Dict[str, pd.Series]]:
+        """MACD 계산"""
+        try:
+            if 'close' not in df.columns or len(df) < long_window:
+                return None
+            close_prices = df['close'].dropna()
+            if len(close_prices) < long_window:
+                return None
+            macd, signal, histogram = talib.MACD(close_prices, fastperiod=short_window, slowperiod=long_window, signalperiod=signal_window)
+            return {'macd': macd, 'signal': signal, 'histogram': histogram}
+        except Exception as e:
+            logger.error(f"Error calculating MACD: {e}")
+            return None
+    
+    def _calculate_ma(self, df: pd.DataFrame, window: int = 20) -> Optional[pd.Series]:
+        """이동평균선 계산"""
+        try:
+            if 'close' not in df.columns or len(df) < window:
+                return None
+            close_prices = df['close'].dropna()
+            if len(close_prices) < window:
+                return None
+            return talib.SMA(close_prices, timeperiod=window)
+        except Exception as e:
+            logger.error(f"Error calculating MA: {e}")
+            return None
+    
+    def _calculate_bollinger(self, df: pd.DataFrame, window: int = 20, nbdevup: int = 2, nbdevdn: int = 2) -> Optional[Dict[str, pd.Series]]:
+        """볼린저 밴드 계산"""
+        try:
+            if 'close' not in df.columns or len(df) < window:
+                return None
+            close_prices = df['close'].dropna()
+            if len(close_prices) < window:
+                return None
+            upper, middle, lower = talib.BBANDS(close_prices, timeperiod=window, nbdevup=nbdevup, nbdevdn=nbdevdn, matype=0)
+            return {'upper': upper, 'middle': middle, 'lower': lower}
+        except Exception as e:
+            logger.error(f"Error calculating Bollinger Bands: {e}")
+            return None
+
+    def _calculate_and_cache_indicator(self, symbol: str, interval: str, indicator_name: str, calculation_func, ohlcv_df: pd.DataFrame, *args, **kwargs) -> Any:
+        """
+        지표를 계산하고 캐시에 저장한 뒤 결과를 반환하는 헬퍼 함수.
+        indicator_name: 캐시에 저장될 지표의 키 이름 (예: 'rsi', 'macd_data')
+        calculation_func: 실제 지표를 계산하는 함수 (예: self._calculate_rsi)
+        ohlcv_df: OHLCV 데이터프레임
+        *args, **kwargs: calculation_func에 전달될 추가 인자들
+        """
+        if ohlcv_df is None or ohlcv_df.empty:
+            logger.warning(f"OHLCV data for {symbol}-{interval} not available for {indicator_name} calculation.")
+            return None
+
+        if 'close' not in ohlcv_df.columns or ohlcv_df['close'].isnull().all():
+            logger.error(f"Close price data is missing or all NaN for {symbol}-{interval}.")
+            return None
+            
+        try:
+            # DataFrame을 첫 번째 인수로 전달
+            result = calculation_func(ohlcv_df, *args, **kwargs)
+            
+            # 계산된 지표를 캐시에 저장
+            if symbol not in self.symbol_data_cache:
+                self.symbol_data_cache[symbol] = {}
+            if interval not in self.symbol_data_cache[symbol]:
+                self.symbol_data_cache[symbol][interval] = {}
+            
+            self.symbol_data_cache[symbol][interval][indicator_name] = result
+            logger.debug(f"{indicator_name} calculated and cached for {symbol}-{interval}.")
+            return result
+        except Exception as e:
+            logger.error(f"Error calculating {indicator_name} for {symbol}-{interval}: {e}", exc_info=True)
+            return None
+
+    def _update_indicators_only(self, symbol: str, interval: str = 'D'):
+        """
+        캐시된 OHLCV 데이터를 사용하여 기술적 지표만 업데이트합니다.
+        새로운 데이터 크롤링은 하지 않습니다.
+        """
+        cached_df = self._get_cached_ohlcv(symbol, interval)
+        if cached_df is None or cached_df.empty:
+            logger.debug(f"No cached data for {symbol} interval {interval}. Cannot update indicators only.")
+            return
+        
+        logger.debug(f"Updating indicators only for {symbol} interval {interval} using cached data ({len(cached_df)} records)")
+        
+        # 기존 캐시된 데이터로 기술적 지표들을 다시 계산
+        try:
+            # 주요 기술적 지표들을 미리 계산하여 캐시에 저장
+            # RSI 계산
+            self._calculate_and_cache_indicator(symbol, interval, 'rsi', self._calculate_rsi, cached_df)
+            
+            # MACD 계산  
+            self._calculate_and_cache_indicator(symbol, interval, 'macd', self._calculate_macd, cached_df)
+            
+            # 이동평균선 계산
+            for window in [5, 10, 20, 60]:
+                self._calculate_and_cache_indicator(symbol, interval, f'ma_{window}', self._calculate_ma, cached_df, window)
+            
+            # 볼린저 밴드 계산
+            self._calculate_and_cache_indicator(symbol, interval, 'bollinger', self._calculate_bollinger, cached_df)
+            
+            logger.debug(f"Indicators updated for {symbol} interval {interval}")
+            
+        except Exception as e:
+            logger.error(f"Error updating indicators for {symbol} interval {interval}: {e}", exc_info=True)
 
     def update_symbol_data(self, symbol: str, interval: str = 'D', limit: int = 300):
         """
@@ -185,55 +314,10 @@ class TechnicalAnalyzer:
 
         self._update_ohlcv_cache(symbol, interval, df)
         
-        # 기술적 지표 계산 및 캐시 저장 (필요에 따라)
-        # 예: self.calculate_rsi(symbol, interval)
-        #     self.calculate_macd(symbol, interval)
-        #     self.calculate_moving_averages(symbol, interval)
-        # Trader에서 각 get_xxx 메소드를 호출할 때 내부적으로 계산하도록 변경할 수도 있음.
-        # 여기서는 update_symbol_data 호출 시 주요 지표를 미리 계산하여 캐시한다고 가정.
+        # 기술적 지표 계산 및 캐시 저장
+        self._update_indicators_only(symbol, interval)
         
-        # 주요 지표들을 미리 계산해서 캐시에 넣어두자.
-        self.get_rsi_values(symbol, interval)
-        self.get_macd(symbol, interval)
-        self.get_moving_average(symbol, interval, window=5) # 예시: 단기 이평선
-        self.get_moving_average(symbol, interval, window=20) # 예시: 장기 이평선
-
         logger.info(f"Data and indicators updated for {symbol} interval {interval}")
-
-    def _calculate_and_cache_indicator(self, symbol: str, interval: str, indicator_name: str, calculation_func, *args, **kwargs) -> Any:
-        """
-        지표를 계산하고 캐시에 저장한 뒤 결과를 반환하는 헬퍼 함수.
-        indicator_name: 캐시에 저장될 지표의 키 이름 (예: 'rsi', 'macd_data')
-        calculation_func: 실제 지표를 계산하는 함수 (예: talib.RSI)
-        *args, **kwargs: calculation_func에 전달될 인자들
-        """
-        if symbol not in self.symbol_data_cache or \
-           interval not in self.symbol_data_cache[symbol] or \
-           'ohlcv' not in self.symbol_data_cache[symbol][interval] or \
-           self.symbol_data_cache[symbol][interval]['ohlcv'].empty:
-            logger.warning(f"OHLCV data for {symbol}-{interval} not available for {indicator_name} calculation.")
-            return None # 또는 적절한 기본값
-
-        # 캐시에 이미 지표가 계산되어 있는지 확인 (선택 사항: 매번 새로 계산할 수도 있음)
-        # cached_indicator = self.symbol_data_cache[symbol][interval].get(indicator_name)
-        # if cached_indicator is not None:
-        #    return cached_indicator
-
-        ohlcv_df = self.symbol_data_cache[symbol][interval]['ohlcv']
-        if 'close' not in ohlcv_df.columns or ohlcv_df['close'].isnull().all():
-            logger.error(f"Close price data is missing or all NaN for {symbol}-{interval}.")
-            return None
-            
-        try:
-            result = calculation_func(ohlcv_df['close'], *args, **kwargs)
-            # 계산된 지표를 캐시에 저장
-            self.symbol_data_cache[symbol][interval][indicator_name] = result
-            logger.debug(f"{indicator_name} calculated and cached for {symbol}-{interval}.")
-            return result
-        except Exception as e:
-            logger.error(f"Error calculating {indicator_name} for {symbol}-{interval}: {e}", exc_info=True)
-            return None
-    
 
     def get_macd(self, symbol: str, interval: str = 'D', short_window: int = 12, long_window: int = 26, signal_window: int = 9) -> Optional[Dict[str, float]]:
         """
@@ -269,7 +353,8 @@ class TechnicalAnalyzer:
             
             if pd.Series(macd).empty or pd.Series(macdsignal).empty or pd.Series(macdhist).empty or \
                pd.Series(macd).isnull().all() or pd.Series(macdsignal).isnull().all() or pd.Series(macdhist).isnull().all():
-                logger.warning(f"MACD calculation resulted in empty or all NaN series for {symbol}-{interval}")
+                # 5분봉 등 짧은 데이터에서는 MACD 계산이 어려울 수 있으므로 debug 레벨로 변경
+                logger.debug(f"MACD calculation resulted in empty or all NaN series for {symbol}-{interval}")
                 return None
 
             # NaN이 아닌 마지막 두 값 가져오기
@@ -282,12 +367,12 @@ class TechnicalAnalyzer:
                 return None
             
             result = {
-                'macd': valid_macd.iloc[-1],
-                'signal': valid_signal.iloc[-1],
-                'histogram': valid_hist.iloc[-1],
-                'prev_macd': valid_macd.iloc[-2],
-                'prev_signal': valid_signal.iloc[-2],
-                'prev_histogram': valid_hist.iloc[-2],
+                'macd': float(valid_macd.iloc[-1]),
+                'signal': float(valid_signal.iloc[-1]),
+                'histogram': float(valid_hist.iloc[-1]),
+                'prev_macd': float(valid_macd.iloc[-2]),
+                'prev_signal': float(valid_signal.iloc[-2]),
+                'prev_histogram': float(valid_hist.iloc[-2]),
             }
             # 캐시에 저장
             if symbol not in self.symbol_data_cache: self.symbol_data_cache[symbol] = {}
@@ -305,8 +390,13 @@ class TechnicalAnalyzer:
         indicator_key = f"ma_{window}"
         
         cached_ma = self.symbol_data_cache.get(symbol, {}).get(interval, {}).get(indicator_key)
-        if cached_ma is not None: # 캐시에 float 값으로 저장되어 있다고 가정
-            return cached_ma
+        if cached_ma is not None:
+            # 캐시된 값이 Series인 경우 마지막 값을 float로 변환
+            if isinstance(cached_ma, pd.Series):
+                if not cached_ma.empty:
+                    return float(cached_ma.iloc[-1])
+            elif isinstance(cached_ma, (int, float)):
+                return float(cached_ma)
 
         ohlcv_df = self._get_cached_ohlcv(symbol, interval)
         if ohlcv_df is None or ohlcv_df.empty or 'close' not in ohlcv_df.columns or len(ohlcv_df) < window:
@@ -324,12 +414,17 @@ class TechnicalAnalyzer:
                 logger.warning(f"MA({window}) calculation resulted in empty or all NaN series for {symbol}-{interval}")
                 return None
             
-            last_ma = ma.dropna().iloc[-1] if not ma.dropna().empty else None
+            last_ma_series = ma.dropna()
+            if last_ma_series.empty:
+                logger.warning(f"No valid MA({window}) data for {symbol}-{interval}")
+                return None
+                
+            last_ma = float(last_ma_series.iloc[-1])  # 명시적으로 float 변환
             
             if last_ma is not None:
                 if symbol not in self.symbol_data_cache: self.symbol_data_cache[symbol] = {}
                 if interval not in self.symbol_data_cache[symbol]: self.symbol_data_cache[symbol][interval] = {}
-                self.symbol_data_cache[symbol][interval][indicator_key] = last_ma
+                self.symbol_data_cache[symbol][interval][indicator_key] = last_ma  # float 값만 캐시에 저장
             return last_ma
             
         except Exception as e:
@@ -450,8 +545,9 @@ class TechnicalAnalyzer:
                 return None
 
             result = {
-                'current_rsi': valid_rsi.iloc[-1],
-                'prev_rsi': valid_rsi.iloc[-2]
+                'rsi': float(valid_rsi.iloc[-1]),  # 현재 RSI (단일 값으로 반환)
+                'current_rsi': float(valid_rsi.iloc[-1]),
+                'prev_rsi': float(valid_rsi.iloc[-2])
             }
             
             if symbol not in self.symbol_data_cache: self.symbol_data_cache[symbol] = {}
@@ -483,7 +579,8 @@ class TechnicalAnalyzer:
             
             # 가격 변동성을 최근 window 기간 동안의 종가 수익률의 표준편차로 계산할 수도 있고, 단순히 가격 자체의 표준편차로 할 수도 있음.
             # 여기서는 종가의 표준편차를 사용.
-            volatility = close_prices.rolling(window=window).std().iloc[-1]
+            volatility_series = close_prices.rolling(window=window).std()
+            volatility = float(volatility_series.iloc[-1])  # 명시적으로 float 변환
             
             if pd.isna(volatility):
                 logger.warning(f"Volatility({window}) calculation resulted in NaN for {symbol}-{interval}")
@@ -545,9 +642,9 @@ class TechnicalAnalyzer:
                 return None
             
             result = {
-                'upper': valid_upper.iloc[-1],
-                'middle': valid_middle.iloc[-1],
-                'lower': valid_lower.iloc[-1]
+                'upper': float(valid_upper.iloc[-1]),
+                'middle': float(valid_middle.iloc[-1]),
+                'lower': float(valid_lower.iloc[-1])
             }
             
             if symbol not in self.symbol_data_cache: self.symbol_data_cache[symbol] = {}
@@ -557,7 +654,7 @@ class TechnicalAnalyzer:
             
         except Exception as e:
             logger.error(f"Error calculating Bollinger Bands for {symbol}-{interval}: {e}", exc_info=True)
-            return None 
+            return None
 
     # 필요에 따라 다른 기술적 지표 메소드 추가
     # 예: get_stochastic_oscillator 등

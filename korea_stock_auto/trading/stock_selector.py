@@ -36,7 +36,12 @@ class StockSelector:
     
     def select_interest_stocks(self, target_count: int) -> List[str]:
         """
-        거래량 상위 종목 중에서 특정 조건을 만족하는 관심 종목을 선정하는 함수
+        개선된 관심 종목 선정 함수
+        1. 거래량 상위 종목으로 일정 거래량 이상 종목 필터링
+        2. 일정 거래량 이상 종목 중 ETF 종목 제거
+        3. 2중 필터링 된 종목들 일별 시세 데이터 및 재무 데이터 호출 및 크롤링 (한번에 수집 및 캐싱)
+        4. 기술적 지표 조건에 따라 조건에 부합하는 요건 갯수당 점수 평가
+        5. 점수 가장 높은 4개 종목 관심종목에 추가 및 해당 종목 매매 진행
         
         Args:
             target_count: 선정할 종목 수
@@ -46,21 +51,36 @@ class StockSelector:
         """
         send_message("관심 종목 선정 시작")
         
-        # API를 통해 거래량 상위 종목 조회
-        logger.debug("거래량 상위 종목 조회 시도")
-        top_stocks = self.api.get_top_traded_stocks(market_type="1", top_n=50)  # 코스피 시장 50개로 증가
+        # 1단계: 거래량 상위 종목으로 일정 거래량 이상 종목 필터링
+        logger.info("1단계: 거래량 상위 종목 조회 및 거래량 필터링")
+        top_stocks = self.api.get_top_traded_stocks(market_type="1", top_n=50)  # 코스피 시장 50개
         
         if not top_stocks:
             logger.error("거래량 상위 종목 조회 실패 - API 응답 없음")
             send_message("관심 종목 없음 (API 응답 실패)")
             return []
         
-        logger.debug(f"거래량 상위 종목 {len(top_stocks)}개 조회 성공")
+        logger.info(f"거래량 상위 종목 {len(top_stocks)}개 조회 성공")
         send_message(f"거래량 상위 종목 {len(top_stocks)}개 조회 성공")
         
-        # ETF 필터링
-        filtered_stocks = []
+        # 거래량 필터링 (일정 거래량 이상)
+        volume_filtered_stocks = []
+        min_volume = 500000  # 최소 50만주 거래량
+        
         for stock in top_stocks:
+            volume = stock.get("volume", 0)
+            if volume >= min_volume:
+                volume_filtered_stocks.append(stock)
+            else:
+                logger.debug(f"거래량 부족으로 제외: {stock['name']} ({stock['code']}) - 거래량: {volume:,}주")
+        
+        logger.info(f"거래량 필터링 후 {len(volume_filtered_stocks)}개 종목")
+        
+        # 2단계: ETF 종목 제거
+        logger.info("2단계: ETF 종목 제거")
+        non_etf_stocks = []
+        
+        for stock in volume_filtered_stocks:
             code = stock["code"]
             name = stock["name"]
             
@@ -69,83 +89,192 @@ class StockSelector:
                 logger.info(f"ETF 종목 제외: {name} ({code})")
                 continue
                 
-            filtered_stocks.append(stock)
+            non_etf_stocks.append(stock)
         
-        if not filtered_stocks:
+        if not non_etf_stocks:
             logger.warning("ETF를 제외한 거래량 상위 종목이 없습니다.")
             send_message("ETF를 제외한 관심 종목 없음")
             return []
             
-        logger.info(f"ETF 제외 후 {len(filtered_stocks)}개 종목 선정됨")
-        send_message(f"ETF 제외 후 {len(filtered_stocks)}개 종목 선정됨")
+        logger.info(f"ETF 제외 후 {len(non_etf_stocks)}개 종목 선정됨")
+        send_message(f"ETF 제외 후 {len(non_etf_stocks)}개 종목 선정됨")
         
-        # 점수 계산 로직 활성화
+        # 3단계: 일별 시세 데이터 및 재무 데이터 호출 및 크롤링 (충분한 데이터로 한번에 수집)
+        logger.info("3단계: 종목별 데이터 수집 및 기술적 지표 계산")
+        data_available_stocks = []
+        
+        for stock in non_etf_stocks:
+            code = stock["code"]
+            name = stock["name"]
+            
+            logger.debug(f"데이터 수집 시작: {name} ({code})")
+            
+            # 일별 시세 데이터 미리 수집 (충분한 데이터 확보 - 300개로 증가)
+            try:
+                # 기술적 분석기에 데이터 업데이트 (일봉 데이터, 충분한 데이터 요청)
+                logger.info(f"기술적 지표 계산용 데이터 수집: {name} ({code})")
+                self.tech_analyzer.update_symbol_data(code, interval='D', limit=300)  # 300개로 증가
+                
+                # 캐시된 데이터 확인
+                ohlcv_data = self.tech_analyzer._get_cached_ohlcv(code, 'D')
+                
+                if ohlcv_data is None or len(ohlcv_data) < 30:
+                    logger.warning(f"충분한 일봉 데이터 없음: {name} ({code}) - 데이터 수: {len(ohlcv_data) if ohlcv_data is not None else 0}")
+                    continue
+                
+                # 기본 정보 추가
+                stock["data_length"] = len(ohlcv_data)
+                data_available_stocks.append(stock)
+                logger.info(f"데이터 수집 완료: {name} ({code}) - 일봉 데이터: {len(ohlcv_data)}개")
+                
+                # API 호출 간 버퍼 (과도한 요청 방지)
+                import time
+                time.sleep(0.5)  # 500ms 지연
+                
+            except Exception as e:
+                logger.warning(f"데이터 수집 실패: {name} ({code}) - 오류: {e}")
+                continue
+        
+        logger.info(f"충분한 데이터를 가진 종목: {len(data_available_stocks)}개")
+        
+        if not data_available_stocks:
+            logger.warning("충분한 데이터를 가진 종목이 없습니다.")
+            send_message("충분한 데이터를 가진 관심 종목 없음")
+            return []
+        
+        # 4단계: 기술적 지표 조건에 따라 점수 평가
+        logger.info("4단계: 기술적 지표 기반 점수 평가")
         scored_stocks = []
         
-        for stock in filtered_stocks:
+        for stock in data_available_stocks:
             code = stock["code"]
             name = stock["name"]
             current_price = stock.get("price", 0)
-            market_cap = stock["market_cap"]
-            volume = stock["volume"]
+            market_cap = stock.get("market_cap", 0)
+            volume = stock.get("volume", 0)
+            
+            logger.debug(f"점수 계산 시작: {name} ({code})")
             
             # 기본 점수
             score = 0
+            score_details = []
             
-            # 1. 시가총액/가격 조건
-            if market_cap > 1000000000000 and current_price > 5000:  # 1조원 이상, 5천원 이상
-                score += 1
-            
-            # 2. 거래량 조건
-            if volume > 1000000:  # 백만주 이상 거래
-                score += 1
-            
-            # 3. 이동평균선 조건
-            ma20 = self.tech_analyzer.get_moving_average(code, window=20)
-            if ma20 and current_price > ma20 * 1.01:  # 20일 이평선 1% 이상 상회
-                score += 1
-            
-            # 4. 변동성 조건
-            volatility = self.tech_analyzer.calculate_volatility(code)
-            if volatility and 0.2 <= volatility <= 0.5:  # 적정 변동성 범위
-                score += 1
-            
-            # 5. 골든 크로스 조건
-            is_golden = self.tech_analyzer.is_golden_cross(code)
-            if is_golden:
-                score += 2
-            
-            # 6. 볼린저 밴드 조건
-            bb = self.tech_analyzer.calculate_bollinger_bands(code)
-            if bb and current_price > bb["middle"] and current_price < bb["upper"]:
-                score += 1
+            try:
+                # 1. 시가총액/가격 조건 (기본 조건)
+                if market_cap > 1000000000000 and current_price > 5000:  # 1조원 이상, 5천원 이상
+                    score += 1
+                    score_details.append("시가총액/가격")
+                
+                # 2. 거래량 조건
+                if volume > 1000000:  # 백만주 이상 거래
+                    score += 1
+                    score_details.append("거래량")
+                
+                # 3. 이동평균선 조건 (20일 이평선)
+                ma20 = self.tech_analyzer.get_moving_average(code, interval='D', window=20)
+                if ma20 is not None and isinstance(ma20, (int, float)) and current_price > ma20 * 1.01:  # 20일 이평선 1% 이상 상회
+                    score += 1
+                    score_details.append("20일이평선상회")
+                
+                # 4. 변동성 조건
+                volatility = self.tech_analyzer.calculate_volatility(code, interval='D', window=20)
+                if volatility is not None and isinstance(volatility, (int, float)) and 0.15 <= volatility <= 0.4:  # 적정 변동성 범위 (15%~40%)
+                    score += 1
+                    score_details.append("적정변동성")
+                
+                # 5. 골든 크로스 조건 (5일선이 20일선 상향돌파)
+                is_golden = self.tech_analyzer.check_ma_golden_cross(code, interval='D', short_period=5, long_period=20)
+                if is_golden is True:  # 명시적으로 True 체크
+                    score += 2
+                    score_details.append("골든크로스")
+                
+                # 6. RSI 조건 (과매도 구간에서 반등)
+                rsi_data = self.tech_analyzer.get_rsi_values(code, interval='D', window=14)
+                if rsi_data and isinstance(rsi_data, dict):
+                    current_rsi = rsi_data.get('current', rsi_data.get('rsi', 50))
+                    if isinstance(current_rsi, (int, float)) and 30 <= current_rsi <= 70:  # RSI 30~70 구간
+                        score += 1
+                        score_details.append("RSI적정")
+                
+                # 7. 볼린저 밴드 조건
+                bb = self.tech_analyzer.calculate_bollinger_bands(code, interval='D', window=20)
+                if bb and isinstance(bb, dict):
+                    bb_middle = bb.get("middle")
+                    bb_upper = bb.get("upper")
+                    if (bb_middle is not None and bb_upper is not None and 
+                        isinstance(bb_middle, (int, float)) and isinstance(bb_upper, (int, float)) and
+                        bb_middle < current_price < bb_upper):  # 중간선과 상단선 사이
+                        score += 1
+                        score_details.append("볼린저밴드")
+                
+                # 8. MACD 조건
+                macd_data = self.tech_analyzer.get_macd(code, interval='D')
+                if macd_data and isinstance(macd_data, dict):
+                    macd_val = macd_data.get('macd', 0)
+                    signal_val = macd_data.get('signal', 0)
+                    if (isinstance(macd_val, (int, float)) and isinstance(signal_val, (int, float)) and 
+                        macd_val > signal_val):  # MACD > Signal
+                        score += 1
+                        score_details.append("MACD상승")
+                
+                logger.debug(f"{name} ({code}) - 점수: {score}, 조건: {', '.join(score_details)}")
+                
+            except Exception as e:
+                logger.warning(f"점수 계산 중 오류: {name} ({code}) - {e}")
+                score = 0
+                score_details = ["오류발생"]
             
             # 점수와 함께 저장
             scored_stocks.append({
                 "code": code,
                 "name": name,
                 "score": score,
-                "current_price": current_price
+                "score_details": score_details,
+                "current_price": current_price,
+                "market_cap": market_cap,
+                "volume": volume,
+                "data_length": stock.get("data_length", 0)
             })
         
+        # 5단계: 점수 가장 높은 종목들 선정
+        logger.info("5단계: 최종 관심종목 선정")
+        
         # 점수 기준으로 정렬
-        scored_stocks.sort(key=lambda x: x["score"], reverse=True)
+        scored_stocks.sort(key=lambda x: (x["score"], x["volume"]), reverse=True)
         
         # 상위 종목 선정
         interest_stocks = []
-        for stock in scored_stocks[:target_count]:
-            if stock["score"] >= 2:  # 최소 2점 이상인 종목만 선정
-                interest_stocks.append(stock["code"])
-                logger.debug(f"거래량 상위 종목으로 선정: {stock['name']} ({stock['code']}) - 점수: {stock['score']}")
+        selected_details = []
         
-        # 선정된 종목이 없으면 점수 상위 종목 선택
-        if not interest_stocks and scored_stocks:
-            for stock in scored_stocks[:min(target_count, len(scored_stocks))]:
+        for stock in scored_stocks[:target_count * 2]:  # 여유있게 선택
+            if stock["score"] >= 3:  # 최소 3점 이상인 종목만 선정
                 interest_stocks.append(stock["code"])
-                logger.debug(f"거래량 상위 종목으로 선정: {stock['name']} ({stock['code']}) - 점수: {stock['score']}")
+                selected_details.append(f"{stock['name']}({stock['code']}) - {stock['score']}점({', '.join(stock['score_details'])})")
+                logger.info(f"관심종목 선정: {stock['name']} ({stock['code']}) - 점수: {stock['score']}, 조건: {', '.join(stock['score_details'])}")
+                
+                if len(interest_stocks) >= target_count:
+                    break
         
-        send_message(f"관심 종목 {len(interest_stocks)}개 선정 완료")
-        logger.info(f"관심 종목 {len(interest_stocks)}개 선정 완료")
+        # 선정된 종목이 부족하면 점수 상위 종목으로 보완
+        if len(interest_stocks) < target_count and scored_stocks:
+            remaining_count = target_count - len(interest_stocks)
+            for stock in scored_stocks:
+                if stock["code"] not in interest_stocks and stock["score"] >= 1:
+                    interest_stocks.append(stock["code"])
+                    selected_details.append(f"{stock['name']}({stock['code']}) - {stock['score']}점({', '.join(stock['score_details'])})")
+                    logger.info(f"보완 선정: {stock['name']} ({stock['code']}) - 점수: {stock['score']}, 조건: {', '.join(stock['score_details'])}")
+                    
+                    remaining_count -= 1
+                    if remaining_count <= 0:
+                        break
+        
+        # 최종 결과 알림
+        if interest_stocks:
+            send_message(f"관심 종목 {len(interest_stocks)}개 선정 완료")
+            for detail in selected_details:
+                logger.info(f"선정 상세: {detail}")
+        else:
+            send_message("조건에 맞는 관심 종목이 없습니다.")
         
         return interest_stocks
     
