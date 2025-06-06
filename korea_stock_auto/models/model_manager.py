@@ -45,7 +45,7 @@ class ModelVersionManager:
         try:
             conn = connect_db(self.db_path)
             if not conn:
-                send_message("모델 데이터베이스 연결 실패")
+                send_message("모델 데이터베이스 연결 실패", config.notification.discord_webhook_url)
                 return
             
             # 모델 버전 테이블
@@ -94,7 +94,7 @@ class ModelVersionManager:
             conn.close()
             
         except Exception as e:
-            send_message(f"모델 테이블 초기화 실패: {e}")
+            send_message(f"모델 테이블 초기화 실패: {e}", config.notification.discord_webhook_url)
     
     def _load_models(self):
         """데이터베이스에서 모델 정보 로드"""
@@ -143,10 +143,10 @@ class ModelVersionManager:
             
             conn.close()
             
-            send_message(f"{len(self.models)} 개의 모델 정보를 로드했습니다. 챔피언 모델: {self.current_champion}")
+            send_message(f"{len(self.models, config.notification.discord_webhook_url)} 개의 모델 정보를 로드했습니다. 챔피언 모델: {self.current_champion}")
             
         except Exception as e:
-            send_message(f"모델 로드 실패: {e}")
+            send_message(f"모델 로드 실패: {e}", config.notification.discord_webhook_url)
     
     def _load_performance_history(self, version_id):
         """특정 모델의 성능 기록 로드"""
@@ -190,7 +190,7 @@ class ModelVersionManager:
                         }
             
         except Exception as e:
-            send_message(f"성능 기록 로드 실패 ({version_id}): {e}")
+            send_message(f"성능 기록 로드 실패 ({version_id}, config.notification.discord_webhook_url): {e}")
     
     def _set_current_champion(self):
         """성능이 가장 좋은 모델을 챔피언으로 설정"""
@@ -307,11 +307,11 @@ class ModelVersionManager:
             # 초기 앙상블 가중치 설정
             self.ensemble_weights[version_id] = 1.0
             
-            send_message(f"모델 저장 완료: {version_id}")
+            send_message(f"모델 저장 완료: {version_id}", config.notification.discord_webhook_url)
             return version_id
             
         except Exception as e:
-            send_message(f"모델 저장 실패: {e}")
+            send_message(f"모델 저장 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def load_model(self, version_id):
@@ -334,7 +334,7 @@ class ModelVersionManager:
             
             # 파일 존재 확인
             if not os.path.exists(model_path):
-                send_message(f"모델 파일이 존재하지 않음: {model_path}")
+                send_message(f"모델 파일이 존재하지 않음: {model_path}", config.notification.discord_webhook_url)
                 return None
             
             # 픽클로 모델 로드
@@ -346,9 +346,9 @@ class ModelVersionManager:
             if version_id in self.models:
                 self.models[version_id]['model'] = model
             
-            send_message(f"모델 로드 완료: {version_id}")
+            send_message(f"모델 로드 완료: {version_id}", config.notification.discord_webhook_url)
             return model
             
         except Exception as e:
-            send_message(f"모델 로드 실패: {e}")
+            send_message(f"모델 로드 실패: {e}", config.notification.discord_webhook_url)
             return None

@@ -12,7 +12,7 @@ import time
 from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING, cast
 from pathlib import Path
 
-from korea_stock_auto.config import URL_BASE
+from korea_stock_auto.config import get_config
 from korea_stock_auto.utils.utils import send_message
 
 # 타입 힌트만을 위한 조건부 임포트
@@ -172,6 +172,9 @@ class MarketPriceMixin:
         Returns:
             dict or None: 실시간 시세 정보
         """
+
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
@@ -188,7 +191,7 @@ class MarketPriceMixin:
             market_code = "E" if is_etf else "J"  # E: ETF, J: 주식
             
             path = "uapi/domestic-stock/v1/quotations/inquire-price"
-            url = f"{URL_BASE}/{path}"
+            url = f"{config.current_api.base_url}/{path}"
             
             params = {
                 "fid_cond_mrkt_div_code": market_code,
@@ -304,7 +307,7 @@ class MarketPriceMixin:
         
         except Exception as e:
             logger.error(f"{code} 실시간 시세 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] {code} 실시간 시세 조회 실패: {e}")
+            send_message(f"[오류] {code} 실시간 시세 조회 실패: {e}", config.notification.discord_webhook_url)
             
             # 예외 상황에서는 항상 None 반환 - 캐시된 데이터 사용하지 않음
             return None 

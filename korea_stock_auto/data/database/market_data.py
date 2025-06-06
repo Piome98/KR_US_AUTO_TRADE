@@ -99,7 +99,7 @@ class MarketDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"시장 지수 데이터 저장 실패: {e}")
-            send_message(f"시장 지수 데이터 저장 실패: {e}")
+            send_message(f"시장 지수 데이터 저장 실패: {e}", config.notification.discord_webhook_url)
             return False
     
     def get_market_index_history(self, index_code: str, days: int = 30) -> pd.DataFrame:
@@ -130,7 +130,7 @@ class MarketDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"시장 지수 이력 조회 실패: {e}")
-            send_message(f"시장 지수 이력 조회 실패: {e}")
+            send_message(f"시장 지수 이력 조회 실패: {e}", config.notification.discord_webhook_url)
             return pd.DataFrame()
     
     def get_latest_market_indices(self) -> Dict[str, Dict[str, Any]]:
@@ -176,5 +176,5 @@ class MarketDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"최신 시장 지수 조회 실패: {e}")
-            send_message(f"최신 시장 지수 조회 실패: {e}")
+            send_message(f"최신 시장 지수 조회 실패: {e}", config.notification.discord_webhook_url)
             return {} 

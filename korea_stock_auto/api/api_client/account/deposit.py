@@ -6,9 +6,7 @@
 import logging
 from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING, cast
 
-from korea_stock_auto.config import (
-    URL_BASE, CANO, ACNT_PRDT_CD, USE_REALTIME_API
-)
+from korea_stock_auto.config import get_config
 from korea_stock_auto.utils.utils import send_message
 
 # 타입 힌트만을 위한 조건부 임포트
@@ -37,18 +35,21 @@ class AccountDepositMixin:
         Notes:
             모의투자와 실전투자 모두 지원하는 함수입니다.
         """
+
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/trading/inquire-psbl-order"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 실전/모의투자 구분
-        tr_id = "TTTC8908R" if USE_REALTIME_API else "VTTC8908R"
+        tr_id = "TTTC8908R" if config.use_realtime_api else "VTTC8908R"
         
         params = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "PDNO": "005930",  # 삼성전자를 기준으로 조회 (다른 종목 코드여도 무관)
             "ORD_UNPR": "65500",  # 가격은 의미 없음
             "ORD_DVSN": "01",  # 시장가
@@ -84,7 +85,7 @@ class AccountDepositMixin:
             
         except Exception as e:
             logger.error(f"계좌 예수금 조회 중 예외 발생: {e}", exc_info=True)
-            send_message(f"[오류] 계좌 예수금 조회 실패: {e}")
+            send_message(f"[오류] 계좌 예수금 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def fetch_daily_balance(self) -> Optional[Dict[str, Any]]:
@@ -103,18 +104,20 @@ class AccountDepositMixin:
         Notes:
             모의투자와 실전투자 모두 지원하는 함수입니다.
         """
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/trading/inquire-daily-balance"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 실전/모의투자 구분
-        tr_id = "TTTC8434R" if USE_REALTIME_API else "VTTC8434R"
+        tr_id = "TTTC8434R" if config.use_realtime_api else "VTTC8434R"
         
         params = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "INQR_DVSN_1": "1",  # 조회구분 1 (1:조회순서 2:종목코드순)
             "INQR_DVSN_2": "1",  # 조회구분 2 (1:순번 2:주식잔고 3:종목평가)
             "CTX_AREA_FK100": "",  # 연속조회검색조건
@@ -176,5 +179,5 @@ class AccountDepositMixin:
             
         except Exception as e:
             logger.error(f"계좌 일별 잔고 조회 중 예외 발생: {e}", exc_info=True)
-            send_message(f"[오류] 계좌 일별 잔고 조회 실패: {e}")
+            send_message(f"[오류] 계좌 일별 잔고 조회 실패: {e}", config.notification.discord_webhook_url)
             return None 

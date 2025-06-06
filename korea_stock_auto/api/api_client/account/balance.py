@@ -6,9 +6,7 @@
 import logging
 from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING, cast
 
-from korea_stock_auto.config import (
-    URL_BASE, CANO, ACNT_PRDT_CD, USE_REALTIME_API
-)
+from korea_stock_auto.config import get_config
 from korea_stock_auto.utils.utils import send_message
 
 # 타입 힌트만을 위한 조건부 임포트
@@ -37,18 +35,21 @@ class AccountBalanceMixin:
         Notes:
             모의투자와 실전투자 모두 지원하는 함수입니다.
         """
+
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/trading/inquire-balance"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 실전/모의투자 구분
-        tr_id = "TTTC8434R" if USE_REALTIME_API else "VTTC8434R"
+        tr_id = "TTTC8434R" if config.use_realtime_api else "VTTC8434R"
         
         params = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "AFHR_FLPR_YN": "N",  # 시간외단일가여부
             "OFL_YN": "N",  # 오프라인여부
             "INQR_DVSN": "01",  # 조회구분: 01-요약
@@ -74,7 +75,7 @@ class AccountBalanceMixin:
             
         except Exception as e:
             logger.error(f"계좌 잔고 조회 중 예외 발생: {e}", exc_info=True)
-            send_message(f"[오류] 계좌 잔고 조회 실패: {e}")
+            send_message(f"[오류] 계좌 잔고 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_stock_balance(self) -> Optional[Dict[str, Any]]:
@@ -191,7 +192,7 @@ class AccountBalanceMixin:
             
         except Exception as e:
             logger.error(f"주식 보유 종목 처리 중 예외 발생: {e}", exc_info=True)
-            send_message(f"[오류] 주식 보유 종목 처리 실패: {e}")
+            send_message(f"[오류] 주식 보유 종목 처리 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_balance(self) -> Optional[Dict[str, float]]:
@@ -257,5 +258,5 @@ class AccountBalanceMixin:
             
         except Exception as e:
             logger.error(f"계좌 잔고 정보 처리 중 예외 발생: {e}", exc_info=True)
-            send_message(f"[오류] 계좌 잔고 정보 처리 실패: {e}")
+            send_message(f"[오류] 계좌 잔고 정보 처리 실패: {e}", config.notification.discord_webhook_url)
             return None 

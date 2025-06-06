@@ -8,7 +8,7 @@ import requests
 import logging
 from typing import Dict, List, Optional, Any, TYPE_CHECKING, cast
 
-from korea_stock_auto.config import URL_BASE
+from korea_stock_auto.config import get_config
 from korea_stock_auto.utils.utils import send_message
 
 # 타입 힌트만을 위한 조건부 임포트
@@ -39,11 +39,14 @@ class SectorInfoMixin:
             >>> api_client.get_sector_list("01")  # 코스피 업종 리스트 조회
             >>> api_client.get_sector_list("02")  # 코스닥 업종 리스트 조회
         """
+
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/inquire-theme-list"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         params = {
             "FID_COND_MRKT_DIV_CODE": market_type,
@@ -84,7 +87,7 @@ class SectorInfoMixin:
             
         except Exception as e:
             logger.error(f"업종 리스트 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 업종 리스트 조회 실패: {e}")
+            send_message(f"[오류] 업종 리스트 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_sector_stocks(self, sector_code: str, market_type: str = "01") -> Optional[List[Dict[str, Any]]]:
@@ -105,7 +108,7 @@ class SectorInfoMixin:
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         params = {
             "FID_COND_MRKT_DIV_CODE": market_type,
@@ -159,7 +162,7 @@ class SectorInfoMixin:
             
         except Exception as e:
             logger.error(f"업종 내 종목 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 업종 내 종목 조회 실패: {e}")
+            send_message(f"[오류] 업종 내 종목 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_hot_sectors(self, market_type: str = "01", count: int = 10) -> Optional[List[Dict[str, Any]]]:
@@ -176,11 +179,13 @@ class SectorInfoMixin:
         Examples:
             >>> api_client.get_hot_sectors("01", 5)  # 코스피 상승률 상위 5개 업종 조회
         """
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/inquire-updown-sector"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         params = {
             "FID_COND_MRKT_DIV_CODE": market_type,
@@ -236,7 +241,7 @@ class SectorInfoMixin:
             
         except Exception as e:
             logger.error(f"상승률 상위 업종 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 상승률 상위 업종 조회 실패: {e}")
+            send_message(f"[오류] 상승률 상위 업종 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_theme_list(self) -> Optional[List[Dict[str, Any]]]:
@@ -249,11 +254,13 @@ class SectorInfoMixin:
         Examples:
             >>> api_client.get_theme_list()  # 전체 테마 리스트 조회
         """
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/theme-list"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         tr_id = "FHKST03030100"
         headers = self._get_headers(tr_id)
@@ -288,7 +295,7 @@ class SectorInfoMixin:
             
         except Exception as e:
             logger.error(f"테마 리스트 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 테마 리스트 조회 실패: {e}")
+            send_message(f"[오류] 테마 리스트 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_theme_stocks(self, theme_code: str) -> Optional[List[Dict[str, Any]]]:
@@ -304,11 +311,13 @@ class SectorInfoMixin:
         Examples:
             >>> api_client.get_theme_stocks("T0001")  # 특정 테마 내 종목 조회
         """
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/theme-items"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         params = {
             "FID_COND_MRKT_DIV_CODE": "0",  # 전체
@@ -353,7 +362,7 @@ class SectorInfoMixin:
             
         except Exception as e:
             logger.error(f"테마 내 종목 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 테마 내 종목 조회 실패: {e}")
+            send_message(f"[오류] 테마 내 종목 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_hot_themes(self, count: int = 10) -> Optional[List[Dict[str, Any]]]:
@@ -369,11 +378,13 @@ class SectorInfoMixin:
         Examples:
             >>> api_client.get_hot_themes(5)  # 상승률 상위 5개 테마 조회
         """
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/theme-updown-rank"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         params = {
             "FID_COND_MRKT_DIV_CODE": "0",  # 전체
@@ -431,5 +442,5 @@ class SectorInfoMixin:
             
         except Exception as e:
             logger.error(f"상승률 상위 테마 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 상승률 상위 테마 조회 실패: {e}")
+            send_message(f"[오류] 상승률 상위 테마 조회 실패: {e}", config.notification.discord_webhook_url)
             return None 

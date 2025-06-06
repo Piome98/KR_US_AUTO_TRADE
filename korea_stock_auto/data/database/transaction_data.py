@@ -114,13 +114,13 @@ class TransactionDataManager(DatabaseManager):
             if result:
                 log_msg = f"거래 내역 저장: {action} {code} {quantity}주 @ {price}원"
                 logger.info(log_msg)
-                send_message(log_msg)
+                send_message(log_msg, config.notification.discord_webhook_url)
                 return True
             return False
             
         except Exception as e:
             logger.error(f"거래 내역 저장 실패: {e}")
-            send_message(f"거래 내역 저장 실패: {e}")
+            send_message(f"거래 내역 저장 실패: {e}", config.notification.discord_webhook_url)
             return False
     
     def log_risk_event(self, code: str, event_type: str, price: float, description: str = "") -> bool:
@@ -157,13 +157,13 @@ class TransactionDataManager(DatabaseManager):
             if result:
                 log_msg = f"위험 관리 이벤트 기록: {event_type} {code} @ {price}원"
                 logger.info(log_msg)
-                send_message(log_msg)
+                send_message(log_msg, config.notification.discord_webhook_url)
                 return True
             return False
             
         except Exception as e:
             logger.error(f"위험 관리 이벤트 기록 실패: {e}")
-            send_message(f"위험 관리 이벤트 기록 실패: {e}")
+            send_message(f"위험 관리 이벤트 기록 실패: {e}", config.notification.discord_webhook_url)
             return False
     
     def get_transactions(self, code: Optional[str] = None, days: int = 30) -> pd.DataFrame:
@@ -204,7 +204,7 @@ class TransactionDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"거래 내역 조회 실패: {e}")
-            send_message(f"거래 내역 조회 실패: {e}")
+            send_message(f"거래 내역 조회 실패: {e}", config.notification.discord_webhook_url)
             return pd.DataFrame()
     
     def get_risk_events(self, code: Optional[str] = None, days: int = 30) -> pd.DataFrame:
@@ -245,7 +245,7 @@ class TransactionDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"위험 관리 이벤트 조회 실패: {e}")
-            send_message(f"위험 관리 이벤트 조회 실패: {e}")
+            send_message(f"위험 관리 이벤트 조회 실패: {e}", config.notification.discord_webhook_url)
             return pd.DataFrame()
     
     def get_trading_summary(self, days: int = 30) -> Dict[str, Any]:
@@ -307,5 +307,5 @@ class TransactionDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"거래 요약 정보 조회 실패: {e}")
-            send_message(f"거래 요약 정보 조회 실패: {e}")
+            send_message(f"거래 요약 정보 조회 실패: {e}", config.notification.discord_webhook_url)
             return {} 

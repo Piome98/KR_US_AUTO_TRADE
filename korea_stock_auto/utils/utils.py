@@ -16,8 +16,6 @@ import hmac
 import os
 from typing import Dict, Any, Optional, Union, List, Callable, TypeVar, cast
 
-from korea_stock_auto.config import DISCORD_WEBHOOK_URL, APP_KEY, APP_SECRET, URL_BASE
-
 # 타입 변수 정의
 T = TypeVar('T')
 R = TypeVar('R')
@@ -79,19 +77,21 @@ def setup_logger(log_level: str = 'INFO', log_file: Optional[str] = None) -> Non
     
     logger.info(f"로깅 설정 완료 (레벨: {log_level}, 파일: {log_file if log_file else '없음'})")
 
-def send_message(msg: str) -> None:
+def send_message(msg: str, webhook_url: Optional[str] = None) -> None:
     """
     디스코드 웹훅을 통한 메시지 전송
     
     Args:
         msg: 전송할 메시지
+        webhook_url: 웹훅 URL (None이면 콘솔에만 출력)
     """
     now = datetime.datetime.now()
     message = {"content": f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] {str(msg)}"}
     
     try:
-        response = requests.post(DISCORD_WEBHOOK_URL, data=message)
-        response.raise_for_status()
+        if webhook_url:
+            response = requests.post(webhook_url, data=message)
+            response.raise_for_status()
         print(message)
     except Exception as e:
         print(f"Discord 메시지 전송 오류: {e}")
@@ -100,21 +100,24 @@ def send_message(msg: str) -> None:
     # API 호출 제한을 피하기 위한 대기
     time.sleep(0.5)
 
-def hashkey(datas: Dict[str, Any]) -> str:
+def hashkey(datas: Dict[str, Any], app_key: str, app_secret: str, url_base: str) -> str:
     """
     API 요청을 위한 해시 키 생성
     
     Args:
         datas: 암호화할 데이터
+        app_key: 앱 키
+        app_secret: 앱 시크릿
+        url_base: 기본 URL
     
     Returns:
         생성된 해시 키
     """
-    url = f"{URL_BASE}/uapi/hashkey"
+    url = f"{url_base}/uapi/hashkey"
     headers = {
         "Content-Type": "application/json", 
-        "appKey": APP_KEY,
-        "appSecret": APP_SECRET
+        "appKey": app_key,
+        "appSecret": app_secret
     }
     
     retry_count = 0
@@ -139,7 +142,7 @@ def hashkey(datas: Dict[str, Any]) -> str:
             wait_time = 1 + (retry_count * 2)
             error_msg = f"해시키 생성 HTTP 오류: {http_err}, {retry_count}/{max_retries} 재시도 ({wait_time}초 대기)"
             logger.error(error_msg)
-            send_message(error_msg)
+            print(f"오류: {error_msg}")
             
             if res and hasattr(res, 'text'):
                 logger.error("응답 내용: %s", res.text)
@@ -151,7 +154,7 @@ def hashkey(datas: Dict[str, Any]) -> str:
             wait_time = 1 + (retry_count * 2)
             error_msg = f"해시키 생성 시간 초과, {retry_count}/{max_retries} 재시도 ({wait_time}초 대기)"
             logger.error(error_msg)
-            send_message(error_msg)
+            print(f"오류: {error_msg}")
             time.sleep(wait_time)
             
         except Exception as e:
@@ -159,12 +162,12 @@ def hashkey(datas: Dict[str, Any]) -> str:
             wait_time = 1 + (retry_count * 2)
             error_msg = f"해시키 생성 오류: {e}, {retry_count}/{max_retries} 재시도 ({wait_time}초 대기)"
             logger.error(error_msg)
-            send_message(error_msg)
+            print(f"오류: {error_msg}")
             time.sleep(wait_time)
     
     error_msg = "해시키 생성 최대 재시도 횟수 초과"
     logger.error(error_msg)
-    send_message(error_msg)
+    print(f"오류: {error_msg}")
     return ""
 
 def create_hmac_signature(data_to_sign: Union[str, Dict[str, Any]], secret_key: str) -> str:
@@ -269,7 +272,7 @@ def handle_http_error(response: requests.Response, error_msg_prefix: str = "API 
     
     error_msg = f"{error_msg_prefix}: {response.status_code} - {error_info.get('message', response.text)}"
     logger.error(error_msg)
-    send_message(error_msg)
+    # Note: webhook_url은 호출하는 쪽에서 별도로 전송해야 함
     
     return error_info
     
@@ -340,7 +343,7 @@ def retry_on_failure(max_retries: int = 3, base_wait: float = 1.0,
                     else:
                         error_msg = f"{error_msg_prefix}: {e}, 최대 재시도 횟수 초과"
                         logger.error(error_msg)
-                        send_message(error_msg)
+                        # Note: webhook_url은 호출하는 쪽에서 별도로 전송해야 함
                         return None
             
             return None

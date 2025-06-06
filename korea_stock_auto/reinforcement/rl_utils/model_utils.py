@@ -62,7 +62,7 @@ def list_available_models(models_dir="models"):
         return models_list
         
     except Exception as e:
-        send_message(f"모델 목록 조회 실패: {e}")
+        send_message(f"모델 목록 조회 실패: {e}", config.notification.discord_webhook_url)
         return []
 
 
@@ -84,7 +84,7 @@ def load_model_by_id(model_id, models_dir="models"):
         
         # 모델 정보 파일이 없거나 모델 파일이 없는 경우
         if not os.path.exists(info_path) or not os.path.exists(model_path):
-            send_message(f"모델 또는 모델 정보를 찾을 수 없습니다: {model_id}")
+            send_message(f"모델 또는 모델 정보를 찾을 수 없습니다: {model_id}", config.notification.discord_webhook_url)
             return None
         
         # 모델 정보 파일에서 모델 유형 로드
@@ -96,14 +96,14 @@ def load_model_by_id(model_id, models_dir="models"):
         # 모델 인스턴스 생성 및 로드
         model = RLModel(model_type=model_type, model_path=model_path)
         if model.load():
-            send_message(f"모델 로드 성공: {model_id}")
+            send_message(f"모델 로드 성공: {model_id}", config.notification.discord_webhook_url)
             return model
         else:
-            send_message(f"모델 로드 실패: {model_id}")
+            send_message(f"모델 로드 실패: {model_id}", config.notification.discord_webhook_url)
             return None
             
     except Exception as e:
-        send_message(f"모델 로드 실패: {e}")
+        send_message(f"모델 로드 실패: {e}", config.notification.discord_webhook_url)
         return None
 
 
@@ -179,11 +179,11 @@ def compare_models(model_ids, test_data, models_dir="models", output_path=None):
                 
             return df_results
         else:
-            send_message("비교할 모델이 없습니다.")
+            send_message("비교할 모델이 없습니다.", config.notification.discord_webhook_url)
             return pd.DataFrame()
             
     except Exception as e:
-        send_message(f"모델 비교 실패: {e}")
+        send_message(f"모델 비교 실패: {e}", config.notification.discord_webhook_url)
         return pd.DataFrame()
 
 
@@ -271,9 +271,9 @@ def visualize_model_performance(model_id, test_data, models_dir="models", output
         plt.savefig(os.path.join(output_dir, f"{model_id}_reward.png"))
         plt.close()
         
-        send_message(f"모델 성능 시각화 완료: {model_id}")
+        send_message(f"모델 성능 시각화 완료: {model_id}", config.notification.discord_webhook_url)
         return True
         
     except Exception as e:
-        send_message(f"모델 성능 시각화 실패: {e}")
+        send_message(f"모델 성능 시각화 실패: {e}", config.notification.discord_webhook_url)
         return False 

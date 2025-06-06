@@ -7,7 +7,7 @@ import numpy as np
 import logging
 from typing import List, Dict, Any, Optional
 
-from korea_stock_auto.config import STOCK_FILTER, EXCLUDE_ETF
+from korea_stock_auto.config import get_config, AppConfig
 from korea_stock_auto.utils.utils import send_message
 from korea_stock_auto.api import KoreaInvestmentApiClient
 from korea_stock_auto.trading.technical_analyzer import TechnicalAnalyzer
@@ -17,20 +17,22 @@ logger = logging.getLogger("stock_auto")
 class StockSelector:
     """국내 주식 관심 종목 선정 클래스"""
     
-    def __init__(self, api_client: KoreaInvestmentApiClient):
+    def __init__(self, api_client: KoreaInvestmentApiClient, config: AppConfig):
         """
         종목 선정기 초기화
         
         Args:
             api_client: API 클라이언트 인스턴스
+            config: 애플리케이션 설정
         """
         self.api = api_client
-        self.score_threshold = STOCK_FILTER["score_threshold"]
-        self.market_cap_threshold = STOCK_FILTER["market_cap_threshold"]
-        self.price_threshold = STOCK_FILTER["price_threshold"]
-        self.monthly_volatility_threshold = STOCK_FILTER["monthly_volatility_threshold"]
-        self.trade_volume_increase_ratio = STOCK_FILTER["trade_volume_increase_ratio"]
-        self.close_price_increase_ratio = STOCK_FILTER["close_price_increase_ratio"]
+        self.config = config
+        self.score_threshold = config.stock_filter.score_threshold
+        self.market_cap_threshold = config.stock_filter.market_cap_threshold
+        self.price_threshold = config.stock_filter.price_threshold
+        self.monthly_volatility_threshold = config.stock_filter.monthly_volatility_threshold
+        self.trade_volume_increase_ratio = config.stock_filter.trade_volume_increase_ratio
+        self.close_price_increase_ratio = config.stock_filter.close_price_increase_ratio
         # 기술적 분석기 초기화
         self.tech_analyzer = TechnicalAnalyzer(api_client)
     
@@ -49,7 +51,7 @@ class StockSelector:
         Returns:
             list: 선정된 관심 종목 코드 리스트
         """
-        send_message("관심 종목 선정 시작")
+        send_message("관심 종목 선정 시작", self.config.notification.discord_webhook_url)
         
         # 1단계: 거래량 상위 종목으로 일정 거래량 이상 종목 필터링
         logger.info("1단계: 거래량 상위 종목 조회 및 거래량 필터링")
@@ -57,11 +59,11 @@ class StockSelector:
         
         if not top_stocks:
             logger.error("거래량 상위 종목 조회 실패 - API 응답 없음")
-            send_message("관심 종목 없음 (API 응답 실패)")
+            send_message("관심 종목 없음 (API 응답 실패)", self.config.notification.discord_webhook_url)
             return []
         
         logger.info(f"거래량 상위 종목 {len(top_stocks)}개 조회 성공")
-        send_message(f"거래량 상위 종목 {len(top_stocks)}개 조회 성공")
+        send_message(f"거래량 상위 종목 {len(top_stocks)}개 조회 성공", self.config.notification.discord_webhook_url)
         
         # 거래량 필터링 (일정 거래량 이상)
         volume_filtered_stocks = []
@@ -85,7 +87,7 @@ class StockSelector:
             name = stock["name"]
             
             # ETF 종목 제외 (설정에 따라)
-            if EXCLUDE_ETF and self.api.is_etf_stock(code):
+            if self.config.stock_filter.exclude_etf and self.api.is_etf_stock(code):
                 logger.info(f"ETF 종목 제외: {name} ({code})")
                 continue
                 
@@ -93,11 +95,11 @@ class StockSelector:
         
         if not non_etf_stocks:
             logger.warning("ETF를 제외한 거래량 상위 종목이 없습니다.")
-            send_message("ETF를 제외한 관심 종목 없음")
+            send_message("ETF를 제외한 관심 종목 없음", self.config.notification.discord_webhook_url)
             return []
             
         logger.info(f"ETF 제외 후 {len(non_etf_stocks)}개 종목 선정됨")
-        send_message(f"ETF 제외 후 {len(non_etf_stocks)}개 종목 선정됨")
+        send_message(f"ETF 제외 후 {len(non_etf_stocks)}개 종목 선정됨", self.config.notification.discord_webhook_url)
         
         # 3단계: 일별 시세 데이터 및 재무 데이터 호출 및 크롤링 (충분한 데이터로 한번에 수집)
         logger.info("3단계: 종목별 데이터 수집 및 기술적 지표 계산")
@@ -139,7 +141,7 @@ class StockSelector:
         
         if not data_available_stocks:
             logger.warning("충분한 데이터를 가진 종목이 없습니다.")
-            send_message("충분한 데이터를 가진 관심 종목 없음")
+            send_message("충분한 데이터를 가진 관심 종목 없음", self.config.notification.discord_webhook_url)
             return []
         
         # 4단계: 기술적 지표 조건에 따라 점수 평가
@@ -270,11 +272,11 @@ class StockSelector:
         
         # 최종 결과 알림
         if interest_stocks:
-            send_message(f"관심 종목 {len(interest_stocks)}개 선정 완료")
+            send_message(f"관심 종목 {len(interest_stocks)}개 선정 완료", self.config.notification.discord_webhook_url)
             for detail in selected_details:
                 logger.info(f"선정 상세: {detail}")
         else:
-            send_message("조건에 맞는 관심 종목이 없습니다.")
+            send_message("조건에 맞는 관심 종목이 없습니다.", self.config.notification.discord_webhook_url)
         
         return interest_stocks
     
@@ -359,7 +361,7 @@ class StockSelector:
         Returns:
             list: 선정된 거래량 급증 종목 코드 리스트
         """
-        send_message("거래량 급증 종목 선정 시작")
+        send_message("거래량 급증 종목 선정 시작", self.config.notification.discord_webhook_url)
         
         # API를 통해 거래량 급증 종목 조회
         logger.info("거래량 급증 종목 조회 시도")
@@ -367,7 +369,7 @@ class StockSelector:
         
         if not increasing_stocks:
             logger.error("거래량 급증 종목 조회 실패 - API 응답 없음")
-            send_message("거래량 급증 종목 없음 (API 응답 실패)")
+            send_message("거래량 급증 종목 없음 (API 응답 실패)", self.config.notification.discord_webhook_url)
             return []
         
         logger.info(f"거래량 급증 종목 {len(increasing_stocks)}개 조회 성공")
@@ -384,7 +386,7 @@ class StockSelector:
                 continue
             
             # ETF 종목 제외
-            if EXCLUDE_ETF and self.api.is_etf_stock(code):
+            if self.config.stock_filter.exclude_etf and self.api.is_etf_stock(code):
                 logger.info(f"ETF 종목 제외: {name} ({code})")
                 continue
                 
@@ -415,8 +417,8 @@ class StockSelector:
         
         # 최종 선정 결과 알림
         if filtered_stocks:
-            send_message(f"선정된 거래량 급증 종목: {', '.join(filtered_stock_names)}")
+            send_message(f"선정된 거래량 급증 종목: {', '.join(filtered_stock_names)}", self.config.notification.discord_webhook_url)
         else:
-            send_message("조건에 맞는 거래량 급증 종목이 없습니다.")
+            send_message("조건에 맞는 거래량 급증 종목이 없습니다.", self.config.notification.discord_webhook_url)
                 
         return filtered_stocks[:target_count] 

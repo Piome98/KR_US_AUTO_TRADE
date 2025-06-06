@@ -11,6 +11,7 @@ from korea_stock_auto.data.database.technical_data import TechnicalDataManager
 from korea_stock_auto.data.database.market_data import MarketDataManager
 from korea_stock_auto.data.database.news_data import NewsDataManager
 from korea_stock_auto.data.database.trading_stats import TradingStatsManager
+from korea_stock_auto.data.hybrid_data_collector import HybridDataCollector
 
 # 기존 클래스와의 호환성을 위한 통합 클래스
 from korea_stock_auto.data.database.stock_database import StockDatabase
@@ -24,4 +25,5 @@ __all__ = [
     'NewsDataManager',
     'TradingStatsManager',
     'StockDatabase',
+    'HybridDataCollector'
 ] 

@@ -54,6 +54,9 @@ class HistoricalPriceMixin:
                 ...
             ]
         """
+
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
@@ -64,9 +67,9 @@ class HistoricalPriceMixin:
             if not start_date:
                 start_date = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
             
-            # API 요청 URL (config에서 실제 URL_BASE 사용)
-            from korea_stock_auto.config import URL_BASE
-            url = f"{URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-daily-price"
+            # API 요청 URL (config에서 실제 config.current_api.base_url 사용)
+            from korea_stock_auto.config import get_config
+            url = f"{config.current_api.base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-price"
             
             # Query Parameters (한국투자증권 API 문서 기준)
             params = {
@@ -140,8 +143,9 @@ class HistoricalPriceMixin:
             today = datetime.now().strftime("%Y%m%d")
             
             # API 요청 URL (일자별 시세와 동일한 엔드포인트 사용)
-            from korea_stock_auto.config import URL_BASE
-            url = f"{URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-daily-price"
+            from korea_stock_auto.config import get_config
+            config = get_config()
+            url = f"{config.current_api.base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-price"
             
             # Query Parameters (분봉 조회용 파라미터)
             params = {

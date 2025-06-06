@@ -9,9 +9,7 @@ import requests
 import logging
 from typing import Dict, Optional, Any, TYPE_CHECKING, cast
 
-from korea_stock_auto.config import (
-    URL_BASE, CANO, ACNT_PRDT_CD, USE_REALTIME_API
-)
+from korea_stock_auto.config import get_config
 from korea_stock_auto.utils.utils import send_message, hashkey
 
 # 타입 힌트만을 위한 조건부 임포트
@@ -44,11 +42,14 @@ class BuyOrderMixin:
             >>> api_client.buy_stock("005930", 10, 70000)  # 삼성전자 10주 70,000원에 지정가 매수
             >>> api_client.buy_stock("005930", 10)  # 삼성전자 10주 시장가 매수
         """
+
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/trading/order-cash"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 시장가 또는 지정가 결정
         if price is None or price <= 0:
@@ -58,8 +59,8 @@ class BuyOrderMixin:
             ord_dvsn = "00"  # 지정가
         
         data = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "PDNO": code,
             "ORD_DVSN": ord_dvsn,
             "ORD_QTY": str(int(qty)),
@@ -67,10 +68,10 @@ class BuyOrderMixin:
         }
         
         # 트랜잭션 ID는 실전/모의 환경에 따라 다름
-        tr_id = "TTTC0802U" if USE_REALTIME_API else "VTTC0802U"
+        tr_id = "TTTC0802U" if config.use_realtime_api else "VTTC0802U"
         
         # 해시키 생성
-        hash_val = hashkey(data)
+        hash_val = hashkey(data, config.current_api.app_key, config.current_api.app_secret, config.current_api.base_url)
         headers = self._get_headers(tr_id, hashkey_val=hash_val)
         
         try:
@@ -90,18 +91,18 @@ class BuyOrderMixin:
                 order_no = res_json.get("output", {}).get("ODNO", "알 수 없음")
                 success_msg = f"[매수 성공] {code} {qty}주 {order_type} (주문번호: {order_no})"
                 logger.info(success_msg)
-                send_message(success_msg)
+                send_message(success_msg, config.notification.discord_webhook_url)
                 return True
             else:
                 error_msg = f"[매수 실패] {res_json}"
                 logger.error(error_msg)
-                send_message(error_msg)
+                send_message(error_msg, config.notification.discord_webhook_url)
                 return False
                 
         except Exception as e:
             error_msg = f"매수 주문 중 예외 발생: {e}"
             logger.error(error_msg, exc_info=True)
-            send_message(f"[오류] 매수 주문 실패: {e}")
+            send_message(f"[오류] 매수 주문 실패: {e}", config.notification.discord_webhook_url)
             return False
     
     def fetch_buyable_amount(self, code: str, price: int = 0) -> Optional[Dict[str, Any]]:
@@ -121,18 +122,20 @@ class BuyOrderMixin:
         Examples:
             >>> api_client.fetch_buyable_amount("005930", 70000)  # 삼성전자 70,000원일 때 매수 가능 금액 조회
         """
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/trading/inquire-daily-ccld"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 트랜잭션 ID는 실전/모의 환경에 따라 다름
-        tr_id = "TTTC8908R" if USE_REALTIME_API else "VTTC8908R"
+        tr_id = "TTTC8908R" if config.use_realtime_api else "VTTC8908R"
         
         params = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "PDNO": code,
             "ORD_UNPR": str(price),
             "ORD_DVSN": "02",
@@ -171,5 +174,5 @@ class BuyOrderMixin:
             
         except Exception as e:
             logger.error(f"매수 가능 금액 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 매수 가능 금액 조회 실패: {e}")
+            send_message(f"[오류] 매수 가능 금액 조회 실패: {e}", config.notification.discord_webhook_url)
             return None 

@@ -78,7 +78,7 @@ class HybridDataCollector:
         logger.info("하이브리드 데이터 수집기 초기화 완료 (시간 기반 캐싱)")
     
     def get_stock_data(self, code: str, period: str = "day", count: int = 1250, 
-                      strategy: str = "hybrid") -> Optional[pd.DataFrame]:
+                      strategy: str = "auto") -> Optional[pd.DataFrame]:
         """
         종목 데이터 수집 (하이브리드 전략)
         
@@ -87,7 +87,8 @@ class HybridDataCollector:
             period: 조회 기간 ("day", "week", "month")
             count: 조회할 데이터 개수 (기본값: 1250개=약5년)
             strategy: 수집 전략
-                - "hybrid": API 우선, 부족시 크롤러 보완 (기본값)
+                - "auto": 데이터베이스 활성화시 db_first, 비활성화시 hybrid (기본값)
+                - "hybrid": API 우선, 부족시 크롤러 보완
                 - "api_only": API만 사용
                 - "crawler_only": 크롤러만 사용
                 - "db_first": 데이터베이스 우선, 부족시 API/크롤러
@@ -95,7 +96,16 @@ class HybridDataCollector:
         Returns:
             pd.DataFrame: OHLCV 데이터프레임 또는 None
         """
-        logger.info(f"종목 데이터 수집 시작: {code}, {period}, {count}개, 전략: {strategy}")
+        # auto 전략인 경우 데이터베이스 상태에 따라 자동 선택
+        if strategy == "auto":
+            if self.db_manager is not None:
+                strategy = "db_first"
+                logger.info(f"종목 데이터 수집 시작: {code}, {period}, {count}개, 전략: auto -> db_first")
+            else:
+                strategy = "hybrid"
+                logger.info(f"종목 데이터 수집 시작: {code}, {period}, {count}개, 전략: auto -> hybrid")
+        else:
+            logger.info(f"종목 데이터 수집 시작: {code}, {period}, {count}개, 전략: {strategy}")
         
         # 캐시 확인
         cached_data = self._get_cached_data(code, period, count)
@@ -609,29 +619,59 @@ class HybridDataCollector:
     
     def _get_data_db_first(self, code: str, period: str, count: int) -> Optional[pd.DataFrame]:
         """
-        데이터베이스 우선 전략
+        데이터베이스 우선 전략 - 오늘 기준 필요한 날짜 범위 스마트 분석
         """
         if not self.db_manager:
             logger.warning("데이터베이스가 비활성화되어 있습니다. 하이브리드 전략으로 대체합니다.")
             return self._get_data_hybrid(code, period, count)
         
         try:
-            db_data = self.db_manager.get_price_history(code, count)
+            # 1. 오늘 기준 필요한 데이터 범위 분석
+            target_date_range = self._calculate_target_date_range(count, period)
+            logger.info(f"필요한 데이터 범위: {target_date_range['start_date']} ~ {target_date_range['end_date']}")
             
-            if not db_data.empty and len(db_data) >= count:
-                logger.info(f"데이터베이스에서 충분한 데이터 발견: {len(db_data)}개")
-                return db_data.head(count)
+            # 2. DB에서 해당 범위의 데이터 확인
+            db_coverage = self._analyze_db_coverage(code, target_date_range, count)
             
-            logger.info(f"데이터베이스 데이터 부족, 외부 수집 후 저장")
-            external_data = self._get_data_hybrid(code, period, count)
+            if db_coverage['is_sufficient']:
+                logger.info(f"DB에서 충분한 데이터 발견: {db_coverage['available_count']}개")
+                return db_coverage['data'].head(count)
             
-            if external_data is not None:
-                self._save_to_database(code, external_data)
-                return external_data
+            # 3. 부족한 데이터 범위 계산 및 보완 전략 결정
+            missing_info = self._calculate_missing_data(db_coverage, target_date_range)
+            logger.info(f"부족한 데이터: {missing_info['missing_days']}일 ({missing_info['missing_recent']}일 최신 + {missing_info['missing_old']}일 과거)")
             
-            if not db_data.empty:
-                logger.warning(f"외부 데이터 수집 실패, 기존 DB 데이터 반환: {len(db_data)}개")
-                return db_data
+            # 4. 최신 데이터 보완 (API 우선)
+            recent_data = None
+            if missing_info['missing_recent'] > 0:
+                api_count = min(30, missing_info['missing_recent'])
+                recent_data = self._get_data_from_api(code, period, api_count)
+                logger.info(f"API로 최신 {api_count}일 데이터 수집")
+            
+            # 5. 과거 데이터 보완 (크롤링 필요시에만)
+            old_data = None
+            if missing_info['missing_old'] > 0:
+                # API로 충분하지 않은 경우에만 크롤링
+                total_needed = missing_info['missing_recent'] + missing_info['missing_old']
+                if total_needed > 30:  # API 한계 초과시
+                    logger.info(f"API 한계 초과, 크롤링으로 {total_needed}일 데이터 수집")
+                    old_data = self._get_data_from_crawler(code, period, total_needed)
+                else:
+                    logger.info(f"API만으로 충분, 크롤링 생략")
+            
+            # 6. 데이터 병합 및 저장
+            final_data = self._merge_all_data(recent_data, old_data, db_coverage['data'])
+            
+            if final_data is not None and not final_data.empty:
+                # 새로운 데이터만 DB에 저장
+                self._save_new_data_to_db(code, final_data, db_coverage['data'])
+                
+                return final_data.head(count) if len(final_data) >= count else final_data
+            
+            # 7. 실패시 기존 DB 데이터라도 반환
+            if not db_coverage['data'].empty:
+                logger.warning(f"데이터 수집 실패, 기존 DB 데이터 반환: {len(db_coverage['data'])}개")
+                return db_coverage['data']
             
             return None
             
@@ -656,6 +696,255 @@ class HybridDataCollector:
         except Exception as e:
             logger.error(f"데이터 병합 오류: {e}", exc_info=True)
             return crawler_data if not crawler_data.empty else api_data
+    
+    def _merge_api_db_data(self, api_data: pd.DataFrame, db_data: pd.DataFrame) -> pd.DataFrame:
+        """
+        API 데이터와 DB 데이터 병합 (중복 제거, 최신 순 정렬)
+        """
+        try:
+            combined = pd.concat([api_data, db_data], ignore_index=True)
+            
+            combined = combined.drop_duplicates(subset=['date'], keep='first')
+            
+            combined = combined.sort_values('date', ascending=False).reset_index(drop=True)
+            
+            logger.debug(f"API-DB 데이터 병합 완료: API {len(api_data)}개 + DB {len(db_data)}개 -> {len(combined)}개")
+            return combined
+            
+        except Exception as e:
+            logger.error(f"API-DB 데이터 병합 오류: {e}", exc_info=True)
+            return db_data if not db_data.empty else api_data
+    
+    def _filter_new_data(self, api_data: pd.DataFrame, db_data: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """
+        API 데이터 중 DB에 없는 새로운 데이터만 필터링
+        """
+        try:
+            if api_data.empty:
+                return None
+            
+            if db_data.empty:
+                return api_data
+            
+            # DB에 있는 날짜 목록
+            existing_dates = set(db_data['date'].tolist())
+            
+            # API 데이터 중 DB에 없는 날짜만 필터링
+            new_data = api_data[~api_data['date'].isin(existing_dates)]
+            
+            if not new_data.empty:
+                logger.debug(f"새로운 데이터 필터링 완료: API {len(api_data)}개 -> 새로운 데이터 {len(new_data)}개")
+                return new_data
+            else:
+                logger.debug("새로운 데이터 없음")
+                return None
+                
+        except Exception as e:
+            logger.error(f"새로운 데이터 필터링 오류: {e}", exc_info=True)
+            return api_data
+    
+    def _calculate_target_date_range(self, count: int, period: str) -> Dict[str, Any]:
+        """
+        오늘 기준으로 필요한 데이터 날짜 범위 계산
+        """
+        from datetime import datetime, timedelta
+        
+        try:
+            end_date = datetime.now().date()
+            
+            # 거래일 기준으로 계산 (주말 제외, 공휴일은 단순화)
+            if period == "day":
+                # 일봉: 약 1.4배 여유 (주말 고려)
+                calendar_days = int(count * 1.4)
+            elif period == "week":
+                # 주봉: 7배
+                calendar_days = count * 7
+            elif period == "month":
+                # 월봉: 30배
+                calendar_days = count * 30
+            else:
+                calendar_days = int(count * 1.4)
+            
+            start_date = end_date - timedelta(days=calendar_days)
+            
+            return {
+                'start_date': start_date,
+                'end_date': end_date,
+                'target_count': count,
+                'period': period
+            }
+            
+        except Exception as e:
+            logger.error(f"날짜 범위 계산 오류: {e}", exc_info=True)
+            # 기본값 반환
+            return {
+                'start_date': datetime.now().date() - timedelta(days=count * 2),
+                'end_date': datetime.now().date(),
+                'target_count': count,
+                'period': period
+            }
+    
+    def _analyze_db_coverage(self, code: str, target_range: Dict[str, Any], count: int) -> Dict[str, Any]:
+        """
+        DB에서 목표 날짜 범위의 데이터 커버리지 분석
+        """
+        try:
+            # DB에서 넉넉하게 데이터 조회
+            db_data = self.db_manager.get_price_history(code, count * 2)
+            
+            if db_data.empty:
+                return {
+                    'is_sufficient': False,
+                    'data': pd.DataFrame(),
+                    'available_count': 0,
+                    'coverage_start': None,
+                    'coverage_end': None,
+                    'missing_recent_days': count,
+                    'missing_old_days': 0
+                }
+            
+            # 날짜 컬럼을 datetime으로 변환
+            db_data['date'] = pd.to_datetime(db_data['date']).dt.date
+            db_data = db_data.sort_values('date', ascending=False)
+            
+            # 목표 범위 내 데이터만 필터링
+            target_data = db_data[
+                (db_data['date'] >= target_range['start_date']) & 
+                (db_data['date'] <= target_range['end_date'])
+            ]
+            
+            is_sufficient = len(target_data) >= count
+            
+            return {
+                'is_sufficient': is_sufficient,
+                'data': target_data,
+                'available_count': len(target_data),
+                'coverage_start': target_data['date'].min() if not target_data.empty else None,
+                'coverage_end': target_data['date'].max() if not target_data.empty else None,
+                'all_db_data': db_data  # 전체 DB 데이터도 저장
+            }
+            
+        except Exception as e:
+            logger.error(f"DB 커버리지 분석 오류: {e}", exc_info=True)
+            return {
+                'is_sufficient': False,
+                'data': pd.DataFrame(),
+                'available_count': 0,
+                'coverage_start': None,
+                'coverage_end': None
+            }
+    
+    def _calculate_missing_data(self, db_coverage: Dict[str, Any], target_range: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        부족한 데이터 범위 계산
+        """
+        try:
+            from datetime import datetime, timedelta
+            
+            target_count = target_range['target_count']
+            available_count = db_coverage['available_count']
+            
+            if available_count >= target_count:
+                return {
+                    'missing_days': 0,
+                    'missing_recent': 0,
+                    'missing_old': 0
+                }
+            
+            missing_days = target_count - available_count
+            
+            # 최신 데이터 부족분 계산
+            today = datetime.now().date()
+            if db_coverage['coverage_end']:
+                days_since_last = (today - db_coverage['coverage_end']).days
+                missing_recent = min(missing_days, max(0, days_since_last))
+            else:
+                missing_recent = min(missing_days, 30)  # API 한계
+            
+            # 과거 데이터 부족분
+            missing_old = max(0, missing_days - missing_recent)
+            
+            return {
+                'missing_days': missing_days,
+                'missing_recent': missing_recent,
+                'missing_old': missing_old
+            }
+            
+        except Exception as e:
+            logger.error(f"부족한 데이터 계산 오류: {e}", exc_info=True)
+            return {
+                'missing_days': target_range['target_count'],
+                'missing_recent': 30,
+                'missing_old': max(0, target_range['target_count'] - 30)
+            }
+    
+    def _merge_all_data(self, recent_data: Optional[pd.DataFrame], old_data: Optional[pd.DataFrame], db_data: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """
+        최신 데이터, 과거 데이터, DB 데이터를 모두 병합
+        """
+        try:
+            data_pieces = []
+            
+            if recent_data is not None and not recent_data.empty:
+                data_pieces.append(recent_data)
+                logger.debug(f"최신 데이터 추가: {len(recent_data)}개")
+            
+            if old_data is not None and not old_data.empty:
+                data_pieces.append(old_data)
+                logger.debug(f"과거 데이터 추가: {len(old_data)}개")
+            
+            if not db_data.empty:
+                data_pieces.append(db_data)
+                logger.debug(f"DB 데이터 추가: {len(db_data)}개")
+            
+            if not data_pieces:
+                return None
+            
+            # 모든 데이터 병합
+            combined = pd.concat(data_pieces, ignore_index=True)
+            
+            # 중복 제거 및 정렬
+            combined = combined.drop_duplicates(subset=['date'], keep='first')
+            combined = combined.sort_values('date', ascending=False).reset_index(drop=True)
+            
+            logger.info(f"전체 데이터 병합 완료: {len(combined)}개")
+            return combined
+            
+        except Exception as e:
+            logger.error(f"전체 데이터 병합 오류: {e}", exc_info=True)
+            return db_data if not db_data.empty else None
+    
+    def _save_new_data_to_db(self, code: str, final_data: pd.DataFrame, existing_db_data: pd.DataFrame) -> bool:
+        """
+        새로운 데이터만 DB에 저장
+        """
+        try:
+            if existing_db_data.empty:
+                # DB에 데이터가 없으면 전체 저장
+                return self._save_to_database(code, final_data)
+            
+            # 기존 DB 날짜 목록
+            existing_dates = set()
+            if 'date' in existing_db_data.columns:
+                existing_dates = set(pd.to_datetime(existing_db_data['date']).dt.date.tolist())
+            
+            # 새로운 데이터만 필터링
+            final_data['date_obj'] = pd.to_datetime(final_data['date']).dt.date
+            new_data = final_data[~final_data['date_obj'].isin(existing_dates)]
+            new_data = new_data.drop('date_obj', axis=1)
+            
+            if not new_data.empty:
+                success = self._save_to_database(code, new_data)
+                if success:
+                    logger.info(f"새로운 데이터 {len(new_data)}개를 DB에 저장 완료")
+                return success
+            else:
+                logger.debug("저장할 새로운 데이터 없음")
+                return True
+                
+        except Exception as e:
+            logger.error(f"새 데이터 DB 저장 오류: {e}", exc_info=True)
+            return False
     
     def _save_to_database(self, code: str, data: pd.DataFrame) -> bool:
         """
@@ -686,7 +975,7 @@ class HybridDataCollector:
             return False
     
     def get_multiple_stocks_data(self, codes: List[str], period: str = "day", 
-                                count: int = 1250, strategy: str = "hybrid") -> Dict[str, pd.DataFrame]:
+                                count: int = 1250, strategy: str = "auto") -> Dict[str, pd.DataFrame]:
         """
         여러 종목의 데이터를 순차적으로 수집
         
@@ -731,7 +1020,7 @@ class HybridDataCollector:
         """
         logger.info(f"기술적 분석용 데이터 수집: {code}, {days}일")
         
-        data = self.get_stock_data(code, period, days, strategy="crawler_only")
+        data = self.get_stock_data(code, period, days, strategy="auto")
         
         if data is not None and len(data) >= days:
             logger.info(f"기술적 분석 데이터 준비 완료: {code}, {len(data)}개")

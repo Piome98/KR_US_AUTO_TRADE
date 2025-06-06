@@ -9,7 +9,7 @@ import logging
 from typing import Dict, List, Optional, Any, TYPE_CHECKING, cast
 from datetime import datetime
 
-from korea_stock_auto.config import URL_BASE
+from korea_stock_auto.config import get_config
 from korea_stock_auto.utils.utils import send_message
 
 # 타입 힌트만을 위한 조건부 임포트
@@ -50,11 +50,14 @@ class SectorIndexMixin:
             >>> api_client.get_market_index("0001")  # 코스피 지수 조회
             >>> api_client.get_market_index("1001")  # 코스닥 지수 조회
         """
+
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/inquire-index"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         params = {
             "FID_COND_MRKT_DIV_CODE": "U",
@@ -121,7 +124,7 @@ class SectorIndexMixin:
             
         except Exception as e:
             logger.error(f"지수 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 지수 조회 실패: {e}")
+            send_message(f"[오류] 지수 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_index_chart_daily(self, index_code: str = "0001", period: int = 30) -> Optional[List[Dict[str, Any]]]:
@@ -145,7 +148,7 @@ class SectorIndexMixin:
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/inquire-index-daily-price"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         params = {
             "FID_COND_MRKT_DIV_CODE": "U",
@@ -204,7 +207,7 @@ class SectorIndexMixin:
             
         except Exception as e:
             logger.error(f"지수 일별 시세 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 지수 일별 시세 조회 실패: {e}")
+            send_message(f"[오류] 지수 일별 시세 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_market_status(self) -> Dict[str, Any]:

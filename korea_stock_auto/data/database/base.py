@@ -45,7 +45,7 @@ class DatabaseManager:
             conn = connect_db(self.db_path)
             if not conn:
                 logger.error("데이터베이스 연결 실패")
-                send_message("데이터베이스 연결 실패")
+                send_message("데이터베이스 연결 실패", config.notification.discord_webhook_url)
                 return False
             
             execute_query(conn, table_schema)
@@ -54,7 +54,7 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"테이블 생성 실패: {e}")
-            send_message(f"테이블 생성 실패: {e}")
+            send_message(f"테이블 생성 실패: {e}", config.notification.discord_webhook_url)
             return False
     
     def execute_query(self, query: str, params: Tuple = (), fetch: bool = False, 
@@ -75,7 +75,7 @@ class DatabaseManager:
             conn = connect_db(self.db_path)
             if not conn:
                 logger.error("데이터베이스 연결 실패")
-                send_message("데이터베이스 연결 실패")
+                send_message("데이터베이스 연결 실패", config.notification.discord_webhook_url)
                 return None if fetch else False
             
             result = execute_query(conn, query, params, fetch=fetch, as_df=as_df)
@@ -84,5 +84,5 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"쿼리 실행 실패: {e}")
-            send_message(f"쿼리 실행 실패: {e}")
+            send_message(f"쿼리 실행 실패: {e}", config.notification.discord_webhook_url)
             return None if fetch else False 

@@ -10,9 +10,40 @@ import datetime
 import logging
 from typing import Optional, Dict, Any, Tuple, Union
 
-from korea_stock_auto.config import (
-    APP_KEY, APP_SECRET, URL_BASE, USE_REALTIME_API
-)
+import os
+import sys
+import yaml
+
+# 설정 직접 로드
+def _load_config():
+    """config.yaml에서 직접 설정 로드"""
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'config.yaml')
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        
+        # API 설정 섹션 가져오기
+        api_config = config.get('API', {})
+        USE_REALTIME_API = api_config.get('USE_REALTIME_API', True)
+        
+        if USE_REALTIME_API:
+            real_config = api_config.get('REAL', {})
+            APP_KEY = real_config.get('APP_KEY', '')
+            APP_SECRET = real_config.get('APP_SECRET', '')
+            URL_BASE = real_config.get('BASE_URL', 'https://openapi.koreainvestment.com:9443')
+        else:
+            vts_config = api_config.get('VTS', {})
+            APP_KEY = vts_config.get('APP_KEY', '')
+            APP_SECRET = vts_config.get('APP_SECRET', '')
+            URL_BASE = vts_config.get('BASE_URL', 'https://openapivts.koreainvestment.com:29443')
+        
+        return APP_KEY, APP_SECRET, URL_BASE, USE_REALTIME_API
+    except Exception as e:
+        # logger가 아직 정의되지 않았을 수 있으므로 print 사용
+        print(f"설정 로드 실패: {e}")
+        return "", "", "", False
+
+APP_KEY, APP_SECRET, URL_BASE, USE_REALTIME_API = _load_config()
 from korea_stock_auto.utils.utils import send_message
 
 # 로깅 설정

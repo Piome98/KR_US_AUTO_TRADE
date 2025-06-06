@@ -11,7 +11,7 @@ import requests
 from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING, cast
 from pathlib import Path
 
-from korea_stock_auto.config import URL_BASE
+from korea_stock_auto.config import get_config
 from korea_stock_auto.utils.utils import send_message
 
 # 타입 힌트만을 위한 조건부 임포트
@@ -43,11 +43,14 @@ class StockInfoMixin:
         Notes:
             모의투자와 실전투자 모두 지원하는 함수입니다.
         """
+
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/search-info"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         params = {
             "FID_COND_MRKT_DIV_CODE": "J",  # 시장 구분 코드: J-주식
@@ -93,7 +96,7 @@ class StockInfoMixin:
             
         except Exception as e:
             logger.error(f"{code} 종목 정보 조회 중 예외 발생: {e}", exc_info=True)
-            send_message(f"[오류] {code} 종목 정보 조회 실패: {e}")
+            send_message(f"[오류] {code} 종목 정보 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_top_traded_stocks(self, market_type: str = "0", top_n: int = 20) -> Optional[List[Dict[str, Any]]]:
@@ -110,8 +113,11 @@ class StockInfoMixin:
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
+        # 설정 가져오기 (self.config가 있으면 사용, 없으면 get_config() 사용)
+        config = getattr(self, 'config', None) or get_config()
+        
         path = "uapi/domestic-stock/v1/quotations/volume-rank"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         params = {
             "FID_COND_MRKT_DIV_CODE": "J",  # 시장 구분 코드 "J"(주식)으로 고정
@@ -153,7 +159,7 @@ class StockInfoMixin:
                 error_code = result.get("msg_cd", "")
                 error_msg = result.get("msg1", "")
                 logger.error(f"거래량 상위 종목 조회 API 오류: {error_code} - {error_msg}")
-                send_message(f"[오류] 거래량 상위 종목 조회 실패: {error_msg}")
+                send_message(f"[오류] 거래량 상위 종목 조회 실패: {error_msg}", config.notification.discord_webhook_url)
                 return None
                 
             # API 응답 구조 확인 및 처리
@@ -301,7 +307,7 @@ class StockInfoMixin:
             
         except Exception as e:
             logger.error(f"거래량 상위 종목 조회 중 예외 발생: {e}", exc_info=True)
-            send_message(f"[오류] 거래량 상위 종목 조회 실패: {e}")
+            send_message(f"[오류] 거래량 상위 종목 조회 실패: {e}", self.config.notification.discord_webhook_url)
             
             # 예외 발생 시 캐시된 데이터 사용
             logger.warning(f"API 조회 중 예외 발생, 캐시된 데이터 확인")
@@ -350,8 +356,11 @@ class StockInfoMixin:
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
+        # 설정 가져오기 (self.config가 있으면 사용, 없으면 get_config() 사용)
+        config = getattr(self, 'config', None) or get_config()
+        
         path = "uapi/domestic-stock/v1/quotations/volume-rank"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         params = {
             "FID_COND_MRKT_DIV_CODE": "J",  # 시장 구분 코드 "J"(주식)으로 고정
@@ -393,7 +402,7 @@ class StockInfoMixin:
                 error_code = result.get("msg_cd", "")
                 error_msg = result.get("msg1", "")
                 logger.error(f"거래량 급증 종목 조회 API 오류: {error_code} - {error_msg}")
-                send_message(f"[오류] 거래량 급증 종목 조회 실패: {error_msg}")
+                send_message(f"[오류] 거래량 급증 종목 조회 실패: {error_msg}", config.notification.discord_webhook_url)
                 return None
                 
             # API 응답 구조 확인 및 처리
@@ -468,7 +477,7 @@ class StockInfoMixin:
             
         except Exception as e:
             logger.error(f"거래량 급증 종목 조회 중 예외 발생: {e}", exc_info=True)
-            send_message(f"[오류] 거래량 급증 종목 조회 실패: {e}")
+            send_message(f"[오류] 거래량 급증 종목 조회 실패: {e}", self.config.notification.discord_webhook_url)
             return None
     
     def get_investor_trends(self, code: str) -> Optional[Dict[str, Any]]:
@@ -488,7 +497,7 @@ class StockInfoMixin:
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/inquire-investor"
-        url = f"{URL_BASE}/{path}"
+        url = f"{self.config.current_api.base_url}/{path}"
         
         params = {
             "fid_cond_mrkt_div_code": "J",
@@ -616,5 +625,5 @@ class StockInfoMixin:
             
         except Exception as e:
             logger.error(f"{code} 투자자별 매매현황 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] {code} 투자자별 매매현황 조회 실패: {e}")
+            send_message(f"[오류] {code} 투자자별 매매현황 조회 실패: {e}", self.config.notification.discord_webhook_url)
             return None 

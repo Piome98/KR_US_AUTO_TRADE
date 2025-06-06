@@ -8,7 +8,7 @@ import time
 import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union
 
-from korea_stock_auto.config import TRADE_CONFIG
+from korea_stock_auto.config import AppConfig
 from korea_stock_auto.utils.utils import send_message
 from korea_stock_auto.api import KoreaInvestmentApiClient
 
@@ -17,23 +17,25 @@ logger = logging.getLogger("stock_auto")
 class RiskManager:
     """위험 관리 클래스"""
     
-    def __init__(self, api_client: KoreaInvestmentApiClient):
+    def __init__(self, api_client: KoreaInvestmentApiClient, config: AppConfig):
         """
         위험 관리자 초기화
         
         Args:
             api_client: API 클라이언트 인스턴스
+            config: 애플리케이션 설정
         """
         self.api = api_client
+        self.config = config
         
         # 위험 관리 설정 로드
-        self.daily_loss_limit = TRADE_CONFIG.get("daily_loss_limit", 0)  # 일일 손실 제한 (원)
-        self.daily_loss_limit_pct = TRADE_CONFIG.get("daily_loss_limit_pct", 0)  # 일일 손실 제한 (%)
-        self.daily_profit_limit_pct = TRADE_CONFIG.get("daily_profit_limit_pct", 0)  # 일일 수익 제한 (%)
-        self.position_loss_limit = TRADE_CONFIG.get("position_loss_limit", 0)  # 포지션당 손실 제한
-        self.max_position_size = TRADE_CONFIG.get("max_position_size", 0)  # 최대 포지션 크기
-        self.trailing_stop_pct = TRADE_CONFIG.get("trailing_stop_pct", 0)  # 트레일링 스탑 비율
-        self.max_exposure_ratio = TRADE_CONFIG.get("max_exposure_ratio", 0.2)  # 최대 노출 비율 (자산의 20%)
+        self.daily_loss_limit = config.risk_management.daily_loss_limit
+        self.daily_loss_limit_pct = config.risk_management.daily_loss_limit_pct
+        self.daily_profit_limit_pct = config.risk_management.daily_profit_limit_pct
+        self.position_loss_limit = config.risk_management.position_loss_limit
+        self.max_position_size = config.risk_management.max_position_size
+        self.trailing_stop_pct = config.risk_management.trailing_stop_pct
+        self.max_exposure_ratio = config.risk_management.max_exposure_ratio
         
         # 상태 변수 초기화
         self.daily_pl = 0  # 일일 손익
@@ -107,17 +109,17 @@ class RiskManager:
         if daily_pl_pct <= -self.daily_loss_limit_pct * 0.7:  # 손실 제한의 70% 도달
             self.risk_level = "CAUTION"
             logger.warning(f"위험 수준 상향: CAUTION (손익률: {daily_pl_pct:.2f}%)")
-            send_message(f"[주의] 일일 손실이 제한의 70%에 도달했습니다: {daily_pl_pct:.2f}%")
+            send_message(f"[주의] 일일 손실이 제한의 70%에 도달했습니다: {daily_pl_pct:.2f}%", self.config.notification.discord_webhook_url)
             
         elif daily_pl_pct <= -self.daily_loss_limit_pct:  # 손실 제한 도달
             self.risk_level = "HIGH"
             logger.warning(f"위험 수준 상향: HIGH (손익률: {daily_pl_pct:.2f}%)")
-            send_message(f"[경고] 일일 손실 제한에 도달했습니다: {daily_pl_pct:.2f}%")
+            send_message(f"[경고] 일일 손실 제한에 도달했습니다: {daily_pl_pct:.2f}%", self.config.notification.discord_webhook_url)
             
         elif daily_pl_pct >= self.daily_profit_limit_pct:  # 수익 제한 도달
             self.risk_level = "TAKE_PROFIT"
             logger.info(f"수익 실현 수준 도달: TAKE_PROFIT (손익률: {daily_pl_pct:.2f}%)")
-            send_message(f"[알림] 일일 수익 목표에 도달했습니다: {daily_pl_pct:.2f}%")
+            send_message(f"[알림] 일일 수익 목표에 도달했습니다: {daily_pl_pct:.2f}%", self.config.notification.discord_webhook_url)
             
         else:
             self.risk_level = "NORMAL"
@@ -131,12 +133,12 @@ class RiskManager:
         """
         if self.risk_level == "HIGH":
             logger.warning("위험 수준 HIGH로 거래 중단")
-            send_message("[거래 중단] 위험 수준이 높아 거래를 중단합니다.")
+            send_message("[거래 중단] 위험 수준이 높아 거래를 중단합니다.", self.config.notification.discord_webhook_url)
             return True
             
         if self.risk_level == "TAKE_PROFIT":
             logger.info("수익 목표 달성으로 거래 중단")
-            send_message("[거래 중단] 일일 수익 목표 달성으로 거래를 중단합니다.")
+            send_message("[거래 중단] 일일 수익 목표 달성으로 거래를 중단합니다.", self.config.notification.discord_webhook_url)
             return True
             
         return False
@@ -162,7 +164,7 @@ class RiskManager:
         # 손실 제한 확인
         if loss_pct <= -self.position_loss_limit:
             logger.warning(f"{code} 포지션 손실 제한 도달: {loss_pct:.2f}%")
-            send_message(f"[손절] {code}: 손실률 {loss_pct:.2f}%로 손절 기준 도달")
+            send_message(f"[손절] {code}: 손실률 {loss_pct:.2f}%로 손절 기준 도달", self.config.notification.discord_webhook_url)
             return True
             
         return False
@@ -197,7 +199,7 @@ class RiskManager:
         drawdown_pct = ((current_price - max_price) / max_price) * 100
         if drawdown_pct <= -self.trailing_stop_pct:
             logger.info(f"{code} 트레일링 스탑 도달: 최고가 {max_price}원 대비 {drawdown_pct:.2f}% 하락")
-            send_message(f"[매도 신호] {code}: 최고가 대비 {drawdown_pct:.2f}% 하락으로 트레일링 스탑 발동")
+            send_message(f"[매도 신호] {code}: 최고가 대비 {drawdown_pct:.2f}% 하락으로 트레일링 스탑 발동", self.config.notification.discord_webhook_url)
             return True
             
         return False
@@ -289,4 +291,72 @@ class RiskManager:
         self.risk_level = "NORMAL"
         self.position_max_prices = {}
         
-        logger.info(f"일일 통계 초기화 완료. 초기 자산: {self.initial_total_assets:,}원") 
+        logger.info(f"일일 통계 초기화 완료. 초기 자산: {self.initial_total_assets:,}원")
+    
+    def check_stop_loss(self, code: str, current_price: float, entry_price: float) -> bool:
+        """
+        손절 조건 확인
+        
+        Args:
+            code: 종목 코드
+            current_price: 현재가
+            entry_price: 진입가
+            
+        Returns:
+            bool: 손절 필요 여부
+        """
+        return self.check_position_loss_limit(code, current_price, entry_price)
+    
+    def check_take_profit(self, code: str, current_price: float, entry_price: float) -> bool:
+        """
+        익절 조건 확인 (현재는 구현되지 않음)
+        
+        Args:
+            code: 종목 코드  
+            current_price: 현재가
+            entry_price: 진입가
+            
+        Returns:
+            bool: 익절 필요 여부
+        """
+        # 향후 구현 예정 - 현재는 항상 False 반환
+        return False
+    
+    def can_buy(self, code: str, order_amount: float, available_cash: float, current_positions_count: int) -> bool:
+        """
+        매수 가능 여부 확인
+        
+        Args:
+            code: 종목 코드
+            order_amount: 주문 금액
+            available_cash: 사용 가능한 현금
+            current_positions_count: 현재 보유 종목 수
+            
+        Returns:
+            bool: 매수 가능 여부
+        """
+        # 거래 중단 상태 확인
+        if self.should_stop_trading():
+            return False
+        
+        # 현금 부족 확인
+        if order_amount > available_cash:
+            logger.debug(f"{code} 매수 불가: 현금 부족 (필요: {order_amount:,.0f}원, 보유: {available_cash:,.0f}원)")
+            return False
+        
+        # 최대 포지션 수 확인 (config에서 가져오기)
+        max_positions = getattr(self.config.trading, 'target_buy_count', 4)
+        if current_positions_count >= max_positions:
+            logger.debug(f"{code} 매수 불가: 최대 보유 종목 수 도달 ({current_positions_count}/{max_positions})")
+            return False
+        
+        # 노출 한도 확인 (개략적)
+        if order_amount > 0:
+            total_assets = self.calculate_total_assets()
+            if total_assets > 0:
+                exposure_ratio = order_amount / total_assets
+                if exposure_ratio > self.max_exposure_ratio:
+                    logger.debug(f"{code} 매수 불가: 노출 한도 초과 (비율: {exposure_ratio:.2%})")
+                    return False
+        
+        return True 

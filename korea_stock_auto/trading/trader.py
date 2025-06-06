@@ -7,73 +7,74 @@ import logging
 import time
 from typing import Dict, List, Any, Optional, Tuple, Union
 
-from korea_stock_auto.config import TRADE_CONFIG
+from korea_stock_auto.config import AppConfig
 from korea_stock_auto.utils.utils import send_message
 from korea_stock_auto.api import KoreaInvestmentApiClient
 from korea_stock_auto.trading.stock_selector import StockSelector
 from korea_stock_auto.trading.technical_analyzer import TechnicalAnalyzer
 from korea_stock_auto.trading.trade_executor import TradeExecutor
 from korea_stock_auto.trading.risk_manager import RiskManager
-from korea_stock_auto.trading.trading_strategy import TradingStrategy, MACDStrategy, MovingAverageStrategy, RSIStrategy
+from korea_stock_auto.trading.trading_strategy import TradingStrategy
 
 
 logger = logging.getLogger("stock_auto")
 
 class Trader:
-    """국내 주식 자동 매매 트레이더 클래스"""
+    """국내 주식 자동 매매 트레이더 클래스 (의존성 주입 적용)"""
     
-    def __init__(self):
-        """트레이더 초기화"""
-        self.api = KoreaInvestmentApiClient()
+    def __init__(self, 
+                 api: KoreaInvestmentApiClient,
+                 config: AppConfig,
+                 analyzer: TechnicalAnalyzer,
+                 risk_manager: RiskManager,
+                 executor: TradeExecutor,
+                 selector: StockSelector,
+                 strategy: TradingStrategy):
+        """
+        트레이더 초기화 (의존성 주입)
         
+        Args:
+            api: 한국투자증권 API 클라이언트
+            config: 애플리케이션 설정
+            analyzer: 기술적 분석기
+            risk_manager: 리스크 관리자
+            executor: 거래 실행기
+            selector: 종목 선택기
+            strategy: 매매 전략
+        """
+        self.api = api
+        self.config = config
+        self.analyzer = analyzer
+        self.risk_manager = risk_manager
+        self.executor = executor
+        self.selector = selector
+        self.strategy = strategy
+        
+        # 트레이딩 상태 변수들
         self.bought_list: List[str] = []
         self.symbol_list: List[str] = []
         self.total_cash: float = 0
         self.stock_dict: Dict[str, Dict[str, Any]] = {}
         self.entry_prices: Dict[str, float] = {}
         self.buy_amount: float = 0
-        self.buy_percentage: float = TRADE_CONFIG.get("buy_percentage", 0.2)
-        self.target_buy_count: int = TRADE_CONFIG.get("target_buy_count", 5)
+        self.buy_percentage: float = config.trading.buy_percentage
+        self.target_buy_count: int = config.trading.target_buy_count
         self.soldout: bool = False
         
+        # 시장 데이터 관리
         self.current_prices: Dict[str, Dict[str, Any]] = {}
         self.last_market_data_fetch_time: float = 0.0
-        self.market_data_fetch_interval: int = 300
+        self.market_data_fetch_interval: int = config.system.data_update_interval
         self.last_strategy_run_time: float = 0.0
-        self.strategy_run_interval: int = 60
+        self.strategy_run_interval: int = config.system.strategy_run_interval
         
-        self.analyzer = TechnicalAnalyzer(self.api)
-        
-        self.risk_manager = RiskManager(self.api)
-        
-        self.executor = TradeExecutor(self.api)
-        
-        self.selector = StockSelector(self.api)
-        
-        strategy_type = TRADE_CONFIG.get("strategy", "ma")
-        self.strategy = self._create_strategy(strategy_type)
-        
-        self.account_update_interval = 60
+        # 계좌 업데이트 설정
+        self.account_update_interval = config.system.account_update_interval
         self.last_account_update_time = 0
         
         self.initialize_trading()
     
-    def _create_strategy(self, strategy_type: str) -> TradingStrategy:
-        """
-        매매 전략 객체 생성
-        
-        Args:
-            strategy_type: 전략 유형 (macd, ma, rsi)
-            
-        Returns:
-            TradingStrategy: 매매 전략 객체
-        """
-        if strategy_type == "ma":
-            return MovingAverageStrategy(self.api, self.analyzer)
-        elif strategy_type == "rsi":
-            return RSIStrategy(self.api, self.analyzer)
-        else:
-            return MACDStrategy(self.api, self.analyzer)
+
     
     def initialize_trading(self):
         """
@@ -89,7 +90,7 @@ class Trader:
         self.risk_manager.reset_daily_stats()
         
         logger.info(f"트레이딩 초기화 완료: 현금 {self.total_cash:,}원, 보유 종목 {len(self.bought_list)}개")
-        send_message(f"[초기화 완료] 현금: {self.total_cash:,}원, 보유 종목: {len(self.bought_list)}개, 초기 자산: {self.risk_manager.initial_total_assets:,}원")
+        send_message(f"[초기화 완료] 현금: {self.total_cash:,}원, 보유 종목: {len(self.bought_list)}개, 초기 자산: {self.risk_manager.initial_total_assets:,}원", self.config.notification.discord_webhook_url)
         
         if self.bought_list:
             stock_names = []

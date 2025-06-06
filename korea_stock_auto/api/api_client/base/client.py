@@ -8,14 +8,13 @@ import requests
 import numpy as np
 import logging
 import time
-from typing import Dict, List, Optional, Any, Union, Tuple, TypeVar, cast
+from typing import Dict, List, Optional, Any, Union, Tuple, TypeVar, cast, TYPE_CHECKING
 from datetime import datetime, timedelta
 import os
 
-from korea_stock_auto.config import (
-    APP_KEY, APP_SECRET, URL_BASE, 
-    CANO, ACNT_PRDT_CD, USE_REALTIME_API
-)
+if TYPE_CHECKING:
+    from korea_stock_auto.config import AppConfig
+
 from korea_stock_auto.utils.utils import (
     send_message, hashkey, create_hmac_signature, 
     handle_http_error, rate_limit_wait, retry_on_failure
@@ -44,21 +43,23 @@ class KoreaInvestmentApiClient(HistoricalPriceMixin, MarketPriceMixin, StockOrde
     인증, 요청 생성, 응답 처리 등의 공통 기능을 제공합니다.
     """
     
-    def __init__(self) -> None:
+    def __init__(self, config: 'AppConfig') -> None:
         """
         API 클라이언트 초기화
         
-        액세스 토큰을 발급받고 기본 설정을 초기화합니다.
+        Args:
+            config: 애플리케이션 설정
         """
+        self.config = config
         self.access_token: Optional[str] = None
         self.token_expired_at: Optional[datetime] = None
         self.last_request_time: float = 0
         self.request_interval: float = 0.1  # 최소 API 호출 간격(초)
         
         # HistoricalPriceMixin에서 필요한 속성들
-        self.base_url = URL_BASE
-        self.app_key = APP_KEY
-        self.app_secret = APP_SECRET
+        self.base_url = config.current_api.base_url
+        self.app_key = config.current_api.app_key
+        self.app_secret = config.current_api.app_secret
         
         # 액세스 토큰 발급
         self.issue_access_token()
@@ -100,7 +101,7 @@ class KoreaInvestmentApiClient(HistoricalPriceMixin, MarketPriceMixin, StockOrde
             return True
         except Exception as e:
             logger.error(f"액세스 토큰 발급 실패: {e}", exc_info=True)
-            send_message(f"[오류] 액세스 토큰 발급 실패: {e}")
+            send_message(f"[오류] 액세스 토큰 발급 실패: {e}", self.config.notification.discord_webhook_url)
             return False
     
     def _get_headers(self, tr_id: str, hashkey_val: Optional[str] = None) -> Dict[str, str]:
@@ -128,8 +129,8 @@ class KoreaInvestmentApiClient(HistoricalPriceMixin, MarketPriceMixin, StockOrde
             
         headers = {
             "authorization": f"Bearer {self.access_token}",
-            "appkey": APP_KEY,
-            "appsecret": APP_SECRET,
+            "appkey": self.app_key,
+            "appsecret": self.app_secret,
             "tr_id": tr_id,
             "custtype": "P",
             "content-type": "application/json; charset=utf-8"
@@ -170,7 +171,7 @@ class KoreaInvestmentApiClient(HistoricalPriceMixin, MarketPriceMixin, StockOrde
                 if "rt_cd" in result and result["rt_cd"] != "0":
                     error_detail = f"{result.get('msg_cd', '')}: {result.get('msg1', '')}"
                     logger.error(f"{error_msg} - {error_detail}")
-                    send_message(f"[오류] {error_msg} - {error_detail}")
+                    send_message(f"[오류] {error_msg} - {error_detail}", self.config.notification.discord_webhook_url)
                     return None
                 
                 return result
@@ -179,11 +180,11 @@ class KoreaInvestmentApiClient(HistoricalPriceMixin, MarketPriceMixin, StockOrde
                 return None
         except json.JSONDecodeError:
             logger.error(f"{error_msg}: 응답을 JSON으로 파싱할 수 없습니다", exc_info=True)
-            send_message(f"[오류] {error_msg}: 응답 형식 오류")
+            send_message(f"[오류] {error_msg}: 응답 형식 오류", self.config.notification.discord_webhook_url)
             return None
         except Exception as e:
             logger.error(f"{error_msg}: {e}", exc_info=True)
-            send_message(f"[오류] {error_msg}: {e}")
+            send_message(f"[오류] {error_msg}: {e}", self.config.notification.discord_webhook_url)
             return None
     
     @retry_on_failure(max_retries=3, base_wait=1)

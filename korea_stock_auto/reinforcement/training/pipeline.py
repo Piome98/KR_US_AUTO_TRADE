@@ -104,7 +104,7 @@ class TrainingPipeline:
             
         except Exception as e:
             logger.error(f"{code} 학습 파이프라인 실패: {e}", exc_info=True)
-            send_message(f"{code} 학습 파이프라인 실패: {e}")
+            send_message(f"{code} 학습 파이프라인 실패: {e}", config.notification.discord_webhook_url)
             return None, None
     
     def _preprocess_data(self, data, feature_set):

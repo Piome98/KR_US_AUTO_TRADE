@@ -5,9 +5,11 @@
 
 import logging
 import abc
-from typing import Dict, List, Any, Optional, Tuple, Union
+from typing import Dict, List, Any, Optional, Tuple, Union, TYPE_CHECKING
 
-from korea_stock_auto.config import TRADE_CONFIG
+if TYPE_CHECKING:
+    from korea_stock_auto.config import AppConfig
+
 from korea_stock_auto.utils.utils import send_message
 from korea_stock_auto.api import KoreaInvestmentApiClient
 from korea_stock_auto.trading.technical_analyzer import TechnicalAnalyzer
@@ -17,16 +19,18 @@ logger = logging.getLogger("stock_auto")
 class TradingStrategy(abc.ABC):
     """매매 전략 인터페이스"""
     
-    def __init__(self, api_client: KoreaInvestmentApiClient, analyzer: TechnicalAnalyzer):
+    def __init__(self, api_client: KoreaInvestmentApiClient, analyzer: TechnicalAnalyzer, config: 'AppConfig'):
         """
         매매 전략 초기화
         
         Args:
             api_client: API 클라이언트 인스턴스
             analyzer: 기술적 분석기 인스턴스
+            config: 애플리케이션 설정
         """
         self.api = api_client
         self.analyzer = analyzer
+        self.config = config
         self.name = "기본 전략"
     
     @abc.abstractmethod
@@ -71,21 +75,22 @@ class TradingStrategy(abc.ABC):
 class MACDStrategy(TradingStrategy):
     """MACD 기반 매매 전략"""
     
-    def __init__(self, api_client: KoreaInvestmentApiClient, analyzer: TechnicalAnalyzer):
+    def __init__(self, api_client: KoreaInvestmentApiClient, analyzer: TechnicalAnalyzer, config: 'AppConfig'):
         """
         MACD 전략 초기화
         
         Args:
             api_client: API 클라이언트 인스턴스
             analyzer: 기술적 분석기 인스턴스
+            config: 애플리케이션 설정
         """
-        super().__init__(api_client, analyzer)
+        super().__init__(api_client, analyzer, config)
         self.name = "MACD 전략"
-        self.macd_short = TRADE_CONFIG.get("macd_short", 12)
-        self.macd_long = TRADE_CONFIG.get("macd_long", 26)
-        self.macd_signal = TRADE_CONFIG.get("macd_signal", 9)
-        self.profit_target_pct = TRADE_CONFIG.get("profit_target_pct", 5.0)
-        self.stop_loss_pct = TRADE_CONFIG.get("stop_loss_pct", 3.0)
+        self.macd_short = config.trading.macd_short_period
+        self.macd_long = config.trading.macd_long_period
+        self.macd_signal = 9  # 기본값 사용
+        self.profit_target_pct = 5.0  # 기본값 사용
+        self.stop_loss_pct = 3.0  # 기본값 사용
     
     def should_buy(self, code: str, current_price: float) -> bool:
         """
@@ -185,20 +190,21 @@ class MACDStrategy(TradingStrategy):
 class MovingAverageStrategy(TradingStrategy):
     """이동평균선 기반 매매 전략"""
     
-    def __init__(self, api_client: KoreaInvestmentApiClient, analyzer: TechnicalAnalyzer):
+    def __init__(self, api_client: KoreaInvestmentApiClient, analyzer: TechnicalAnalyzer, config: 'AppConfig'):
         """
         이동평균선 전략 초기화
         
         Args:
             api_client: API 클라이언트 인스턴스
             analyzer: 기술적 분석기 인스턴스
+            config: 애플리케이션 설정
         """
-        super().__init__(api_client, analyzer)
+        super().__init__(api_client, analyzer, config)
         self.name = "이동평균선 전략"
-        self.short_period = TRADE_CONFIG.get("ma_short_period", 5)
-        self.long_period = TRADE_CONFIG.get("ma_long_period", 20)
-        self.profit_target_pct = TRADE_CONFIG.get("profit_target_pct", 5.0)
-        self.stop_loss_pct = TRADE_CONFIG.get("stop_loss_pct", 3.0)
+        self.short_period = 5  # 기본값 사용
+        self.long_period = config.trading.ma_period
+        self.profit_target_pct = 5.0  # 기본값 사용
+        self.stop_loss_pct = 3.0  # 기본값 사용
     
     def should_buy(self, code: str, current_price: float) -> bool:
         """
@@ -282,21 +288,22 @@ class MovingAverageStrategy(TradingStrategy):
 class RSIStrategy(TradingStrategy):
     """RSI 기반 매매 전략"""
     
-    def __init__(self, api_client: KoreaInvestmentApiClient, analyzer: TechnicalAnalyzer):
+    def __init__(self, api_client: KoreaInvestmentApiClient, analyzer: TechnicalAnalyzer, config: 'AppConfig'):
         """
         RSI 전략 초기화
         
         Args:
             api_client: API 클라이언트 인스턴스
             analyzer: 기술적 분석기 인스턴스
+            config: 애플리케이션 설정
         """
-        super().__init__(api_client, analyzer)
+        super().__init__(api_client, analyzer, config)
         self.name = "RSI 전략"
-        self.rsi_period = TRADE_CONFIG.get("rsi_period", 14)
-        self.rsi_oversold = TRADE_CONFIG.get("rsi_oversold", 30)
-        self.rsi_overbought = TRADE_CONFIG.get("rsi_overbought", 70)
-        self.profit_target_pct = TRADE_CONFIG.get("profit_target_pct", 5.0)
-        self.stop_loss_pct = TRADE_CONFIG.get("stop_loss_pct", 3.0)
+        self.rsi_period = config.trading.rsi_period
+        self.rsi_oversold = config.trading.rsi_oversold
+        self.rsi_overbought = config.trading.rsi_overbought
+        self.profit_target_pct = 5.0  # 기본값 사용
+        self.stop_loss_pct = 3.0  # 기본값 사용
     
     def should_buy(self, code: str, current_price: float) -> bool:
         """

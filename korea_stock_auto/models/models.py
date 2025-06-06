@@ -38,7 +38,7 @@ class ModelManager:
                           if f.endswith('.pkl') and f.startswith('rl_model_')]
             
             if not model_files:
-                send_message("사용 가능한 모델 파일이 없습니다. 기본 전략을 사용합니다.")
+                send_message("사용 가능한 모델 파일이 없습니다. 기본 전략을 사용합니다.", config.notification.discord_webhook_url)
                 self.fallback_mode = True
                 return False
             
@@ -50,12 +50,12 @@ class ModelManager:
             with open(model_path, 'rb') as f:
                 self.model = pickle.load(f)
             
-            send_message(f"모델 로드 성공: {latest_model}")
+            send_message(f"모델 로드 성공: {latest_model}", config.notification.discord_webhook_url)
             self.fallback_mode = False
             return True
             
         except Exception as e:
-            send_message(f"모델 로드 실패: {e}")
+            send_message(f"모델 로드 실패: {e}", config.notification.discord_webhook_url)
             self.fallback_mode = True
             return False
     
@@ -94,7 +94,7 @@ class ModelManager:
             return int(action), float(confidence)
             
         except Exception as e:
-            send_message(f"예측 실패: {e}")
+            send_message(f"예측 실패: {e}", config.notification.discord_webhook_url)
             return self._fallback_strategy(state)
     
     def _fallback_strategy(self, state):
@@ -161,4 +161,4 @@ class ModelManager:
                 f.write(json.dumps(log_data) + '\n')
                 
         except Exception as e:
-            send_message(f"예측 로깅 실패: {e}") 
+            send_message(f"예측 로깅 실패: {e}", config.notification.discord_webhook_url) 

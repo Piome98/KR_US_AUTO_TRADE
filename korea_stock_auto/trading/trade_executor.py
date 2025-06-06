@@ -7,7 +7,7 @@ import logging
 import time
 from typing import Dict, List, Any, Optional, Tuple, Union
 
-from korea_stock_auto.config import TRADE_CONFIG
+from korea_stock_auto.config import AppConfig
 from korea_stock_auto.utils.utils import send_message, wait
 from korea_stock_auto.api import KoreaInvestmentApiClient
 
@@ -16,18 +16,20 @@ logger = logging.getLogger("stock_auto")
 class TradeExecutor:
     """주식 매매 실행 클래스"""
     
-    def __init__(self, api_client: KoreaInvestmentApiClient):
+    def __init__(self, api_client: KoreaInvestmentApiClient, config: AppConfig):
         """
         매매 실행기 초기화
         
         Args:
             api_client: API 클라이언트 인스턴스
+            config: 애플리케이션 설정
         """
         self.api = api_client
-        self.max_buy_attempts = TRADE_CONFIG.get("max_buy_attempts", 3)
-        self.max_sell_attempts = TRADE_CONFIG.get("max_sell_attempts", 5)
-        self.order_wait_time = TRADE_CONFIG.get("order_wait_time", 1.0)
-        self.slippage_tolerance = TRADE_CONFIG.get("slippage_tolerance", 0.01)  # 1% 슬리피지 허용
+        self.config = config
+        self.max_buy_attempts = config.trading.max_buy_attempts
+        self.max_sell_attempts = config.trading.max_sell_attempts
+        self.order_wait_time = config.trading.order_wait_time
+        self.slippage_tolerance = config.trading.slippage_tolerance
     
     def execute_buy(self, code: str, price: float, quantity: int) -> Dict[str, Any]:
         """
@@ -46,7 +48,7 @@ class TradeExecutor:
             return {"success": False, "message": "매수 주문 파라미터 오류"}
             
         logger.info(f"{code} 매수 주문 시작: {quantity}주 @ {price}원")
-        send_message(f"[매수 시도] {code}: {quantity}주 @ {price}원")
+        send_message(f"[매수 시도] {code}: {quantity}주 @ {price}원", self.config.notification.discord_webhook_url)
         
         # 시장가 주문 여부 확인 (0원이면 시장가)
         is_market_order = (price == 0)
@@ -56,7 +58,7 @@ class TradeExecutor:
         
         if result["success"]:
             logger.info(f"{code} 매수 주문 성공: 주문번호 {result.get('order_no', 'N/A')}")
-            send_message(f"[매수 완료] {code}: {quantity}주 @ {price}원")
+            send_message(f"[매수 완료] {code}: {quantity}주 @ {price}원", self.config.notification.discord_webhook_url)
         else:
             logger.error(f"{code} 매수 주문 실패: {result.get('message', '알 수 없는 오류')}")
             send_message(f"[매수 실패] {code}: {result.get('message', '알 수 없는 오류')}")
@@ -80,7 +82,7 @@ class TradeExecutor:
             return {"success": False, "message": "매도 주문 파라미터 오류"}
             
         logger.info(f"{code} 매도 주문 시작: {quantity}주 @ {price}원")
-        send_message(f"[매도 시도] {code}: {quantity}주 @ {price}원")
+        send_message(f"[매도 시도] {code}: {quantity}주 @ {price}원", self.config.notification.discord_webhook_url)
         
         # 시장가 주문 여부 확인 (0원이면 시장가)
         is_market_order = (price == 0)
@@ -90,7 +92,7 @@ class TradeExecutor:
         
         if result["success"]:
             logger.info(f"{code} 매도 주문 성공: 주문번호 {result.get('order_no', 'N/A')}")
-            send_message(f"[매도 완료] {code}: {quantity}주 @ {price}원")
+            send_message(f"[매도 완료] {code}: {quantity}주 @ {price}원", self.config.notification.discord_webhook_url)
         else:
             logger.error(f"{code} 매도 주문 실패: {result.get('message', '알 수 없는 오류')}")
             send_message(f"[매도 실패] {code}: {result.get('message', '알 수 없는 오류')}")
@@ -260,7 +262,7 @@ class TradeExecutor:
             logger.info("매도할 주식이 없습니다.")
             return {}
             
-        send_message(f"보유 주식 전체 매도 시작 ({len(stocks)}종목)")
+        send_message(f"보유 주식 전체 매도 시작 ({len(stocks)}종목)", self.config.notification.discord_webhook_url)
         
         results = {}
         for code, stock_info in stocks.items():
@@ -275,7 +277,7 @@ class TradeExecutor:
             # 연속 API 호출 방지를 위한 대기
             time.sleep(self.order_wait_time)
             
-        send_message(f"보유 주식 전체 매도 완료: 성공 {sum(results.values())}건, 실패 {len(results) - sum(results.values())}건")
+        send_message(f"보유 주식 전체 매도 완료: 성공 {sum(results.values())}건, 실패 {len(results) - sum(results.values())}건", self.config.notification.discord_webhook_url)
         return results
     
     def calculate_buy_quantity(self, price: float, available_cash: float) -> int:

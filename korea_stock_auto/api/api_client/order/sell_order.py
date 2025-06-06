@@ -9,9 +9,7 @@ import requests
 import logging
 from typing import Dict, Optional, Any, TYPE_CHECKING, cast
 
-from korea_stock_auto.config import (
-    URL_BASE, CANO, ACNT_PRDT_CD, USE_REALTIME_API
-)
+from korea_stock_auto.config import get_config
 from korea_stock_auto.utils.utils import send_message, hashkey
 
 # 타입 힌트만을 위한 조건부 임포트
@@ -47,8 +45,11 @@ class SellOrderMixin:
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
+        # 설정 로드
+        config = get_config()
+        
         path = "uapi/domestic-stock/v1/trading/order-cash"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 시장가 또는 지정가 결정
         if price is None or price <= 0:
@@ -58,8 +59,8 @@ class SellOrderMixin:
             ord_dvsn = "00"  # 지정가
         
         data = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "PDNO": code,
             "ORD_DVSN": ord_dvsn,
             "ORD_QTY": str(int(qty)),
@@ -67,10 +68,10 @@ class SellOrderMixin:
         }
         
         # 트랜잭션 ID는 실전/모의 환경에 따라 다름
-        tr_id = "TTTC0801U" if USE_REALTIME_API else "VTTC0801U"
+        tr_id = "TTTC0801U" if config.use_realtime_api else "VTTC0801U"
         
         # 해시키 생성
-        hash_val = hashkey(data)
+        hash_val = hashkey(data, config.current_api.app_key, config.current_api.app_secret, config.current_api.base_url)
         headers = self._get_headers(tr_id, hashkey_val=hash_val)
         
         try:
@@ -90,18 +91,18 @@ class SellOrderMixin:
                 order_no = res_json.get("output", {}).get("ODNO", "알 수 없음")
                 success_msg = f"[매도 성공] {code} {qty}주 {order_type} (주문번호: {order_no})"
                 logger.info(success_msg)
-                send_message(success_msg)
+                send_message(success_msg, config.notification.discord_webhook_url)
                 return True
             else:
                 error_msg = f"[매도 실패] {res_json}"
                 logger.error(error_msg)
-                send_message(error_msg)
+                send_message(error_msg, config.notification.discord_webhook_url)
                 return False
                 
         except Exception as e:
             error_msg = f"매도 주문 중 예외 발생: {e}"
             logger.error(error_msg, exc_info=True)
-            send_message(f"[오류] 매도 주문 실패: {e}")
+            send_message(f"[오류] 매도 주문 실패: {e}", config.notification.discord_webhook_url)
             return False
     
     def fetch_sellable_quantity(self, code: str) -> Optional[Dict[str, Any]]:
@@ -123,15 +124,18 @@ class SellOrderMixin:
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
+        # 설정 로드
+        config = get_config()
+        
         path = "uapi/domestic-stock/v1/trading/inquire-balance"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 트랜잭션 ID는 실전/모의 환경에 따라 다름
-        tr_id = "TTTC8434R" if USE_REALTIME_API else "VTTC8434R"
+        tr_id = "TTTC8434R" if config.use_realtime_api else "VTTC8434R"
         
         params = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "AFHR_FLPR_YN": "N",
             "OFL_YN": "N",
             "INQR_DVSN": "02",
@@ -188,5 +192,5 @@ class SellOrderMixin:
             
         except Exception as e:
             logger.error(f"매도 가능 수량 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 매도 가능 수량 조회 실패: {e}")
+            send_message(f"[오류] 매도 가능 수량 조회 실패: {e}", config.notification.discord_webhook_url)
             return None 

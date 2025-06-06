@@ -91,7 +91,7 @@ class PriceDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"가격 데이터 저장 실패: {e}")
-            send_message(f"가격 데이터 저장 실패: {e}")
+            send_message(f"가격 데이터 저장 실패: {e}", config.notification.discord_webhook_url)
             return False
     
     def get_price_history(self, code: str, days: int = 30) -> pd.DataFrame:
@@ -122,7 +122,7 @@ class PriceDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"가격 이력 조회 실패: {e}")
-            send_message(f"가격 이력 조회 실패: {e}")
+            send_message(f"가격 이력 조회 실패: {e}", config.notification.discord_webhook_url)
             return pd.DataFrame()
     
     def get_latest_price(self, code: str) -> Optional[Dict[str, Any]]:
@@ -160,5 +160,5 @@ class PriceDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"최신 가격 조회 실패: {e}")
-            send_message(f"최신 가격 조회 실패: {e}")
+            send_message(f"최신 가격 조회 실패: {e}", config.notification.discord_webhook_url)
             return None 

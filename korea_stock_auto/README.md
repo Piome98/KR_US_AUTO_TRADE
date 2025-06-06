@@ -6,6 +6,55 @@
 
 ## 최근 변경사항
 
+### Legacy Config 완전 제거 및 DI 아키텍처 전환 (2025-06-06)
+
+시스템 아키텍처를 현대적인 의존성 주입(Dependency Injection) 패턴으로 완전히 전환했습니다:
+
+- **🔧 Legacy Config 완전 제거**:
+  - `korea_stock_auto/config/legacy.py` 파일 삭제
+  - 전역 변수 기반 설정 방식 완전 제거 (`APP_KEY`, `APP_SECRET`, `URL_BASE` 등)
+  - `config/__init__.py`에서 legacy import 제거
+  - 버전 업그레이드: v3.0.0
+
+- **📦 DI 컨테이너 기반 아키텍처 구축**:
+  - `KoreaInvestmentApiClient`에 AppConfig 의존성 주입
+  - `ServiceFactory`에서 모든 컴포넌트에 config 전달
+  - `TradingStrategy` 클래스들에 AppConfig 주입
+  - 중앙집중식 설정 관리 패턴 적용
+
+- **🔗 클린 아키텍처 전환**:
+  - Utils 모듈에서 legacy config 의존성 제거
+  - `send_message`, `hashkey` 함수 매개변수화
+  - API 클라이언트 생성 시 config 주입 패턴 적용
+  - 순환 참조 문제 해결 및 TYPE_CHECKING 활용
+
+- **📈 아키텍처 개선 효과**:
+  - ✅ **일관성**: 모든 컴포넌트가 AppConfig를 통해 설정에 접근
+  - ✅ **테스트 용이성**: 의존성 주입으로 모킹 및 테스트 간편화
+  - ✅ **유지보수성**: 중앙집중식 설정 관리로 변경 사항 추적 용이
+  - ✅ **확장성**: 새로운 설정 추가 시 AppConfig만 수정하면 됨
+  - ✅ **타입 안전성**: TYPE_CHECKING을 통한 타입 힌트 개선
+
+- **🏗️ 새로운 구조**:
+  ```
+  📁 현재 아키텍처 (v3.0.0)
+  ├── 🔧 DI Container 기반 서비스 등록
+  ├── 📦 AppConfig 중앙 집중식 설정 관리
+  ├── 🔗 의존성 주입을 통한 클린 아키텍처
+  └── 🚫 Legacy Config 완전 제거
+  ```
+
+- **권장 사용 패턴**:
+  ```python
+  # 이전 (Legacy)
+  from korea_stock_auto.config import APP_KEY, APP_SECRET  # ❌
+  
+  # 현재 (Clean Architecture)
+  def __init__(self, config: AppConfig):  # ✅
+      self.config = config
+      self.app_key = config.current_api.app_key
+  ```
+
 ### 통합 데이터 수집기 개발 - 크롤링 기능 통합 (2025-05-23)
 
 기존의 분리된 크롤링 모듈들을 하나의 통합 데이터 수집기로 통합하여 코드 구조를 개선했습니다:
@@ -517,3 +566,172 @@ python -m korea_stock_auto.main --cycles 1
   - 파라미터 값 수정 및 누락된 파라미터 추가
   - 헤더 부분의 트레이딩 ID 설정 확인
   - 문제 해결을 위해 __pycache__ 초기화 적용
+
+  ### 하이브리드 데이터 수집기 (HybridDataCollector)
+
+통합된 데이터 수집 시스템으로 API와 크롤러의 장점을 결합하여 효율적인 데이터 수집을 제공합니다.
+
+#### 주요 기능
+- **API + 크롤러 통합**: 한국투자증권 API와 네이버 증권 크롤러를 하나의 인터페이스로 통합
+- **시간 기반 캐싱**: 장중/장 마감 후 다른 캐싱 전략으로 최적화된 데이터 수집
+- **지능형 캐시 관리**: 더 큰 데이터셋이 있으면 자동으로 활용, 작은 캐시 파일 자동 정리
+- **다양한 수집 전략**: hybrid, api_only, crawler_only, db_first 4가지 전략 제공
+- **자동 데이터 보완**: API 데이터 부족 시 크롤러로 자동 보완
+- **5년치 장기 데이터**: 네이버 증권 크롤링으로 최대 5년치 과거 데이터 수집
+
+#### 시간 기반 캐싱 시스템
+
+##### 🕘 장중 (09:00 ~ 15:30)
+- **API 데이터**: 실시간 데이터 우선 사용 (캐싱하지 않음)
+- **크롤러 데이터**: 기존 캐시 파일 활용
+- **목적**: 최신 실시간 데이터 확보
+
+##### 🕕 장 마감 후 (15:30 이후, 주말)
+- **API 데이터**: 당일 확정 데이터를 파일에 캐싱
+- **크롤러 데이터**: 기존 캐시 파일 활용
+- **목적**: 확정된 데이터 영구 보존, 다음 거래일 빠른 로딩
+
+```python
+# 장중 (실시간 데이터)
+collector = HybridDataCollector()
+data = collector.get_stock_data("005930", strategy="api_only")  # 실시간 API 호출
+
+# 장 마감 후 (캐시된 데이터)
+data = collector.get_stock_data("005930", strategy="api_only")  # 캐시 파일에서 즉시 로딩
+
+# 시장 상태 확인
+is_open = collector.is_market_open()
+print(f"장 운영 중: {is_open}")
+```
+
+#### 캐시 디렉토리 구조
+```
+cache/
+├── stock_data/          # 크롤러 캐시 (장기 데이터)
+│   ├── 005930_day_300.pkl
+│   └── 000660_day_1250.pkl
+└── api_data/            # API 캐시 (일별 확정 데이터)
+    ├── 005930_day_2024-01-15.pkl
+    └── 000660_day_2024-01-15.pkl
+```
+
+#### 최적화된 데이터 수집 전략
+
+##### 1️⃣ 관심종목 선정 시 (초회)
+```python
+# 300개 데이터 크롤링 및 캐싱 (1회만)
+data = collector.get_stock_data("005930", count=300, strategy="crawler_only")
+# 파일 저장: cache/stock_data/005930_day_300.pkl
+```
+
+##### 2️⃣ 강화학습 및 매매 시
+```python
+# 장 마감 후: 캐시된 데이터만 사용 (크롤링 없음)
+data = collector.get_stock_data("005930", count=100, strategy="hybrid")
+# 캐시에서 즉시 로딩 (0.01초)
+
+# 장중: 실시간 API + 캐시된 과거 데이터 조합
+recent_data = collector.get_stock_data("005930", count=30, strategy="api_only")  # 실시간
+historical_data = collector.get_stock_data("005930", count=300, strategy="crawler_only")  # 캐시
+```
+
+#### 캐시 관리
+```python
+# 캐시 상태 확인 (크롤러 + API 캐시)
+cache_info = collector.get_cache_info()
+print(f"전체 캐시 파일: {cache_info['total_summary']['total_files']}개")
+print(f"전체 캐시 크기: {cache_info['total_summary']['total_size_mb']}MB")
+print(f"장 운영 상태: {cache_info['market_status']['is_market_open']}")
+
+# 선택적 캐시 삭제
+collector.clear_cache("005930")  # 특정 종목 캐시 삭제
+collector.clear_cache("005930", "day", include_api_cache=False)  # 크롤러 캐시만 삭제
+collector.clear_cache()  # 모든 캐시 삭제
+```
+
+#### 성능 향상 효과
+- **초회 크롤링**: 300개 데이터 수집 (1회만)
+- **이후 사용**: 캐시에서 즉시 로딩 (100배 이상 빠름)
+- **실시간 데이터**: 장중에만 API 호출, 장 마감 후 캐시 활용
+- **네트워크 부하**: 최소화된 API 호출 및 크롤링
+
+#### 사용 예시
+```python
+from korea_stock_auto.data.hybrid_data_collector import HybridDataCollector
+
+# 초기화
+collector = HybridDataCollector()
+
+# 관심종목 선정 시 (초회 크롤링)
+samsung_data = collector.get_stock_data("005930", period="day", count=300, strategy="crawler_only")
+
+# 강화학습/매매 시 (캐시 활용)
+samsung_cached = collector.get_stock_data("005930", period="day", count=100, strategy="hybrid")
+
+# 실시간 데이터 필요 시 (장중)
+if collector.is_market_open():
+    real_time_data = collector.get_stock_data("005930", count=30, strategy="api_only")
+``` 
+
+
+# 2025-06-05 결합성, 응집성 고려해 로직 개선
+graph TB
+    subgraph "Infrastructure Layer"
+        API[Korea Investment API]
+        DB[(Database)]
+        FS[File System]
+        EXT[External Services]
+    end
+    
+    subgraph "Interface Adapters"
+        APIC[API Client]
+        REPO[Repository]
+        CONF[Config Manager]
+        LOG[Logger]
+        NOTIF[Notification Service]
+    end
+    
+    subgraph "Use Cases (Application Layer)"
+        TRADE[Trading Use Case]
+        RISK[Risk Management Use Case]
+        DATA[Data Collection Use Case]
+        ANALYSIS[Analysis Use Case]
+    end
+    
+    subgraph "Domain Layer"
+        STOCK[Stock Entity]
+        ORDER[Order Entity]
+        PORT[Portfolio Entity]
+        STRAT[Strategy Interface]
+        RULES[Business Rules]
+    end
+    
+    subgraph "Framework Layer"
+        WEB[Web Interface]
+        CLI[CLI Interface]
+        SCHEDULER[Scheduler]
+    end
+    
+    WEB --> TRADE
+    CLI --> TRADE
+    SCHEDULER --> TRADE
+    
+    TRADE --> STOCK
+    TRADE --> ORDER
+    TRADE --> PORT
+    TRADE --> STRAT
+    
+    RISK --> PORT
+    RISK --> RULES
+    
+    DATA --> STOCK
+    ANALYSIS --> STOCK
+    
+    TRADE --> APIC
+    TRADE --> REPO
+    TRADE --> CONF
+    
+    APIC --> API
+    REPO --> DB
+    CONF --> FS
+    NOTIF --> EXT

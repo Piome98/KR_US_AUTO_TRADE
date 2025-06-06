@@ -9,9 +9,7 @@ import requests
 import logging
 from typing import Dict, Optional, Any, TYPE_CHECKING, cast
 
-from korea_stock_auto.config import (
-    URL_BASE, CANO, ACNT_PRDT_CD, USE_REALTIME_API
-)
+from korea_stock_auto.config import get_config
 from korea_stock_auto.utils.utils import send_message, hashkey
 
 # 타입 힌트만을 위한 조건부 임포트
@@ -48,18 +46,21 @@ class OrderModificationMixin:
         Examples:
             >>> api_client.modify_order("XXXXXXXX", "005930", 10, 70000)  # 삼성전자 주문 정정
         """
+
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/trading/order-rvsecncl"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 트랜잭션 ID는 실전/모의 환경에 따라 다름
-        tr_id = "TTTC0803U" if USE_REALTIME_API else "VTTC0803U"
+        tr_id = "TTTC0803U" if config.use_realtime_api else "VTTC0803U"
         
         data = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "KRX_FWDG_ORD_ORGNO": "",
             "ORGN_ODNO": org_order_no,
             "RVSE_CNCL_DVSN_CD": "01",  # 정정(01)
@@ -71,7 +72,7 @@ class OrderModificationMixin:
         }
         
         # 해시키 생성
-        hash_val = hashkey(data)
+        hash_val = hashkey(data, config.current_api.app_key, config.current_api.app_secret, config.current_api.base_url)
         headers = self._get_headers(tr_id, hashkey_val=hash_val)
         
         try:
@@ -91,18 +92,18 @@ class OrderModificationMixin:
                 order_no = res_json.get("output", {}).get("ODNO", "알 수 없음")
                 success_msg = f"[정정 성공] {code} {qty}주 {order_type_name} (주문번호: {order_no})"
                 logger.info(success_msg)
-                send_message(success_msg)
+                send_message(success_msg, config.notification.discord_webhook_url)
                 return True
             else:
                 error_msg = f"[정정 실패] {res_json}"
                 logger.error(error_msg)
-                send_message(error_msg)
+                send_message(error_msg, config.notification.discord_webhook_url)
                 return False
                 
         except Exception as e:
             error_msg = f"주문 정정 중 예외 발생: {e}"
             logger.error(error_msg, exc_info=True)
-            send_message(f"[오류] 주문 정정 실패: {e}")
+            send_message(f"[오류] 주문 정정 실패: {e}", config.notification.discord_webhook_url)
             return False
     
     def cancel_order(self, order_no: str, code: str, qty: int) -> bool:
@@ -123,18 +124,20 @@ class OrderModificationMixin:
         Examples:
             >>> api_client.cancel_order("XXXXXXXX", "005930", 10)  # 삼성전자 주문 취소
         """
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/trading/order-rvsecncl"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 트랜잭션 ID는 실전/모의 환경에 따라 다름
-        tr_id = "TTTC0803U" if USE_REALTIME_API else "VTTC0803U"
+        tr_id = "TTTC0803U" if config.use_realtime_api else "VTTC0803U"
         
         data = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "KRX_FWDG_ORD_ORGNO": "",
             "ORGN_ODNO": order_no,
             "RVSE_CNCL_DVSN_CD": "02",  # 취소(02)
@@ -146,7 +149,7 @@ class OrderModificationMixin:
         }
         
         # 해시키 생성
-        hash_val = hashkey(data)
+        hash_val = hashkey(data, config.current_api.app_key, config.current_api.app_secret, config.current_api.base_url)
         headers = self._get_headers(tr_id, hashkey_val=hash_val)
         
         try:
@@ -164,18 +167,18 @@ class OrderModificationMixin:
             if res_json.get("rt_cd") == "0":
                 success_msg = f"[취소 성공] {code} {qty}주 (주문번호: {order_no})"
                 logger.info(success_msg)
-                send_message(success_msg)
+                send_message(success_msg, config.notification.discord_webhook_url)
                 return True
             else:
                 error_msg = f"[취소 실패] {res_json}"
                 logger.error(error_msg)
-                send_message(error_msg)
+                send_message(error_msg, config.notification.discord_webhook_url)
                 return False
                 
         except Exception as e:
             error_msg = f"주문 취소 중 예외 발생: {e}"
             logger.error(error_msg, exc_info=True)
-            send_message(f"[오류] 주문 취소 실패: {e}")
+            send_message(f"[오류] 주문 취소 실패: {e}", config.notification.discord_webhook_url)
             return False
     
     def cancel_all_orders(self) -> bool:
@@ -193,13 +196,15 @@ class OrderModificationMixin:
         Examples:
             >>> api_client.cancel_all_orders()  # 모든 미체결 주문 취소
         """
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         # 모의투자에서는 기능 미지원
-        if not USE_REALTIME_API:
+        if not config.use_realtime_api:
             logger.warning("미체결 주문 전체 취소 기능은 모의투자에서 지원되지 않습니다.")
-            send_message("[안내] 미체결 주문 전체 취소 기능은 모의투자에서 지원되지 않습니다.")
+            send_message("[안내] 미체결 주문 전체 취소 기능은 모의투자에서 지원되지 않습니다.", config.notification.discord_webhook_url)
             return False
         
         # 미체결 주문 조회

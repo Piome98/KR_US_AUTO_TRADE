@@ -8,6 +8,7 @@ import sqlite3
 import pandas as pd
 from typing import Optional, Union, List, Dict, Any, Tuple, cast
 from korea_stock_auto.utils.utils import send_message
+from korea_stock_auto.config import get_config
 
 def connect_db(db_path: str) -> Optional[sqlite3.Connection]:
     """
@@ -23,7 +24,7 @@ def connect_db(db_path: str) -> Optional[sqlite3.Connection]:
         conn = sqlite3.connect(db_path)
         return conn
     except Exception as e:
-        send_message(f"데이터베이스 연결 실패: {e}")
+        send_message(f"데이터베이스 연결 실패: {e}", get_config().notification.discord_webhook_url)
         return None
 
 def execute_query(
@@ -74,6 +75,6 @@ def execute_query(
     
     except Exception as e:
         error_msg = f"쿼리 실행 실패: {e}"
-        send_message(error_msg)
+        send_message(error_msg, get_config().notification.discord_webhook_url)
         conn.rollback()
         return None 

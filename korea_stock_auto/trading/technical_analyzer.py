@@ -32,7 +32,7 @@ class TechnicalAnalyzer:
         # 하이브리드 데이터 수집기 초기화 (API + 네이버 크롤러)
         self.data_collector = HybridDataCollector(
             api_client=self.api,  # 기존 API 클라이언트 재사용
-            use_database=False,   # 데이터베이스 비활성화 (속도 우선)
+            use_database=True,    # 데이터베이스 활성화 (중복 크롤링 방지)
             api_delay=0.1,        # API 호출 간 지연시간
             crawler_delay=0.5     # 크롤러 요청 간 지연시간
         )
@@ -64,7 +64,7 @@ class TechnicalAnalyzer:
                 code=symbol,
                 period=period,
                 count=limit,
-                strategy="hybrid"  # API 우선, 부족시 크롤러 보완
+                strategy="hybrid"  # API 우선, 부족시 크롤링으로 보완하는 하이브리드 전략
             )
             
             if df is not None and not df.empty:
@@ -676,107 +676,5 @@ class TechnicalAnalyzer:
             self.symbol_data_cache.clear()
             logger.info("All technical analyzer cache cleared.")
 
-# 사용 예시 (테스트용)
-if __name__ == '__main__':
-    # # 모의 API 클라이언트 (실제 API 클라이언트로 대체 필요)
-    class MockApiClient:
-        def get_daily_stock_chart_data(self, symbol, period_code='D', days_to_fetch=200):
-            # 모의 데이터 생성
-            import numpy as np
-            dates = pd.date_range(end=pd.Timestamp.today(), periods=days_to_fetch, freq='B') # B: Business day
-            data = {
-                'stck_bsop_date': dates.strftime('%Y%m%d'),
-                'stck_oprc': np.random.randint(10000, 50000, size=days_to_fetch),
-                'stck_hgpr': np.random.randint(10000, 50000, size=days_to_fetch),
-                'stck_lwpr': np.random.randint(10000, 50000, size=days_to_fetch),
-                'stck_clpr': np.random.randint(10000, 50000, size=days_to_fetch),
-                'acml_vol': np.random.randint(100000, 1000000, size=days_to_fetch)
-            }
-            # 일부 데이터는 실제 API 응답처럼 문자열일 수 있음
-            df = pd.DataFrame(data)
-            # stck_oprc, stck_hgpr, stck_lwpr, stck_clpr, acml_vol는 문자열로 변환 후 API 처럼 list of dicts로 반환
-            for col in ['stck_oprc', 'stck_hgpr', 'stck_lwpr', 'stck_clpr', 'acml_vol']:
-                df[col] = df[col].astype(str)
-            return df.to_dict(orient='records')
-
-        def get_intraday_minute_chart_data(self, symbol, time_interval='5', hours_to_fetch=10):
-            num_records = int(hours_to_fetch * 60 / int(time_interval))
-            base_time = pd.Timestamp.now().replace(hour=9, minute=0, second=0, microsecond=0)
-            times = []
-            current_time = base_time
-            for _ in range(num_records):
-                times.append(current_time.strftime('%H%M%S'))
-                current_time += pd.Timedelta(minutes=int(time_interval))
-            
-            dates = pd.Timestamp('today').strftime('%Y%m%d')
-            data = {
-                'stck_bsop_date': [dates] * num_records,
-                'stck_cntg_hour': times,
-                'stck_prpr': [str(np.random.randint(10000,50000)) for _ in range(num_records)], # 현재가
-                'cntg_vol': [str(np.random.randint(1000,10000)) for _ in range(num_records)],   # 체결거래량
-                # 분봉에서 시고저종은 제공되지 않는 경우가 많음. 현재가(stck_prpr)를 주로 사용.
-                # 필요시 stck_oprc, stck_hgpr, stck_lwpr도 추가
-                 'stck_oprc': [str(np.random.randint(10000,50000)) for _ in range(num_records)],
-                 'stck_hgpr': [str(np.random.randint(10000,50000)) for _ in range(num_records)],
-                 'stck_lwpr': [str(np.random.randint(10000,50000)) for _ in range(num_records)],
-            }
-            return pd.DataFrame(data).to_dict(orient='records')
-
-
-    logging.basicConfig(level=logging.DEBUG)
-    mock_api = MockApiClient()
-    analyzer = TechnicalAnalyzer(mock_api)
-    
-    test_symbol = "005930" # 삼성전자
-    
-    # 데이터 업데이트 (내부적으로 OHLCV 가져오고 캐시)
-    analyzer.update_symbol_data(test_symbol, interval='D', limit=50) # 일봉 데이터, 최근 50일
-    analyzer.update_symbol_data(test_symbol, interval='5', limit=50) # 5분봉 데이터, 최근 50개 봉
-    
-    # MACD 가져오기
-    macd_d = analyzer.get_macd(test_symbol, interval='D')
-    if macd_d:
-        logger.info(f"일봉 MACD for {test_symbol}: {macd_d}")
-
-    macd_5 = analyzer.get_macd(test_symbol, interval='5')
-    if macd_5:
-        logger.info(f"5분봉 MACD for {test_symbol}: {macd_5}")
-
-    # 이동평균선 가져오기
-    ma5_d = analyzer.get_moving_average(test_symbol, interval='D', window=5)
-    ma20_d = analyzer.get_moving_average(test_symbol, interval='D', window=20)
-    logger.info(f"일봉 5 MA for {test_symbol}: {ma5_d}")
-    logger.info(f"일봉 20 MA for {test_symbol}: {ma20_d}")
-
-    ma5_5 = analyzer.get_moving_average(test_symbol, interval='5', window=5)
-    logger.info(f"5분봉 5 MA for {test_symbol}: {ma5_5}")
-
-    # 골든크로스 / 데드크로스 확인
-    golden_d = analyzer.check_ma_golden_cross(test_symbol, interval='D', short_period=5, long_period=20)
-    dead_d = analyzer.check_ma_dead_cross(test_symbol, interval='D', short_period=5, long_period=20)
-    logger.info(f"일봉 Golden Cross (5/20) for {test_symbol}: {golden_d}")
-    logger.info(f"일봉 Dead Cross (5/20) for {test_symbol}: {dead_d}")
-
-    # RSI 값 가져오기
-    rsi_d = analyzer.get_rsi_values(test_symbol, interval='D', window=14)
-    if rsi_d:
-        logger.info(f"일봉 RSI (14) for {test_symbol}: Current={rsi_d['current_rsi']:.2f}, Previous={rsi_d['prev_rsi']:.2f}")
-
-    rsi_5 = analyzer.get_rsi_values(test_symbol, interval='5', window=14)
-    if rsi_5:
-        logger.info(f"5분봉 RSI (14) for {test_symbol}: Current={rsi_5['current_rsi']:.2f}, Previous={rsi_5['prev_rsi']:.2f}")
-
-    # 캐시된 데이터 확인 (디버깅용)
-    # print("\n--- CACHED DATA ---")
-    # print(analyzer.symbol_data_cache.get(test_symbol, {}).get('D', {}).keys())
-    # if analyzer.symbol_data_cache.get(test_symbol, {}).get('D', {}).get('ohlcv') is not None:
-    #    print("Daily OHLCV for 005930 (tail):")
-    #    print(analyzer.symbol_data_cache[test_symbol]['D']['ohlcv'].tail())
-
-    # print(analyzer.symbol_data_cache.get(test_symbol, {}).get('5', {}).keys())
-    # if analyzer.symbol_data_cache.get(test_symbol, {}).get('5', {}).get('ohlcv') is not None:
-    #    print("5min OHLCV for 005930 (tail):")
-    #    print(analyzer.symbol_data_cache[test_symbol]['5']['ohlcv'].tail())
-        
-    # analyzer.clear_cache(test_symbol, 'D')
-    # analyzer.clear_cache() 
+# 실제 환경에서는 main 실행 부분이 필요하지 않음
+# 테스트는 별도 테스트 파일에서 수행 

@@ -256,5 +256,5 @@ class StockDatabase:
             
         except Exception as e:
             logger.error(f"결합 데이터 조회 실패: {e}")
-            send_message(f"결합 데이터 조회 실패: {e}")
+            send_message(f"결합 데이터 조회 실패: {e}", config.notification.discord_webhook_url)
             return pd.DataFrame() 

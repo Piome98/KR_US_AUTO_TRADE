@@ -9,9 +9,7 @@ import logging
 from typing import Dict, List, Optional, Any, TYPE_CHECKING, cast
 from datetime import datetime
 
-from korea_stock_auto.config import (
-    URL_BASE, CANO, ACNT_PRDT_CD, USE_REALTIME_API
-)
+from korea_stock_auto.config import get_config
 from korea_stock_auto.utils.utils import send_message
 
 # 타입 힌트만을 위한 조건부 임포트
@@ -44,15 +42,18 @@ class OrderStatusMixin:
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
+        # 설정 로드
+        config = get_config()
+        
         path = "uapi/domestic-stock/v1/trading/inquire-order"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 트랜잭션 ID는 실전/모의 환경에 따라 다름
-        tr_id = "TTTC8036R" if USE_REALTIME_API else "VTTC8036R"
+        tr_id = "TTTC8036R" if config.use_realtime_api else "VTTC8036R"
         
         params = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "INQR_DVSN_1": "0",
             "INQR_DVSN_2": "0",
             "CTX_AREA_FK100": "",
@@ -97,7 +98,7 @@ class OrderStatusMixin:
             
         except Exception as e:
             logger.error(f"주문 체결 상태 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 주문 체결 상태 조회 실패: {e}")
+            send_message(f"[오류] 주문 체결 상태 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_pending_orders(self) -> Optional[List[Dict[str, Any]]]:
@@ -118,20 +119,23 @@ class OrderStatusMixin:
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
+        # 설정 로드
+        config = get_config()
+        
         path = "uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 모의투자에서는 기능 미지원
-        if not USE_REALTIME_API:
+        if not config.use_realtime_api:
             logger.warning("미체결 주문 조회 기능은 모의투자에서 지원되지 않습니다.")
-            send_message("[안내] 미체결 주문 조회 기능은 모의투자에서 지원되지 않습니다.")
+            send_message("[안내] 미체결 주문 조회 기능은 모의투자에서 지원되지 않습니다.", config.notification.discord_webhook_url)
             return None
         
         tr_id = "TTTC8036R"
         
         params = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "CTX_AREA_FK100": "",
             "CTX_AREA_NK100": "",
             "INQR_DVSN_1": "0", # 조회구분 전체:0, 매도:1, 매수:2
@@ -182,7 +186,7 @@ class OrderStatusMixin:
             
         except Exception as e:
             logger.error(f"미체결 주문 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 미체결 주문 조회 실패: {e}")
+            send_message(f"[오류] 미체결 주문 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_executed_orders(self, order_date: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
@@ -205,18 +209,21 @@ class OrderStatusMixin:
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
-        path = "uapi/domestic-stock/v1/trading/inquire-daily-ccld"
-        url = f"{URL_BASE}/{path}"
+        # 설정 로드
+        config = get_config()
         
-        tr_id = "TTTC8001R" if USE_REALTIME_API else "VTTC8001R"
+        path = "uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+        url = f"{config.current_api.base_url}/{path}"
+        
+        tr_id = "TTTC8001R" if config.use_realtime_api else "VTTC8001R"
         
         # 주문일자가 없으면 당일로 설정
         if not order_date:
             order_date = datetime.now().strftime("%Y%m%d")
         
         params = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "INQR_STRT_DT": order_date,
             "INQR_END_DT": order_date,
             "SLL_BUY_DVSN_CD": "00",  # 전체
@@ -278,7 +285,7 @@ class OrderStatusMixin:
             
         except Exception as e:
             logger.error(f"체결 내역 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 체결 내역 조회 실패: {e}")
+            send_message(f"[오류] 체결 내역 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_profit_loss(self, from_date: str, to_date: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -299,6 +306,9 @@ class OrderStatusMixin:
             >>> api_client.get_profit_loss("20230101")  # 2023년 1월 1일부터 현재까지의 손익 조회
             >>> api_client.get_profit_loss("20230101", "20230131")  # 2023년 1월 한 달간의 손익 조회
         """
+
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
@@ -307,13 +317,13 @@ class OrderStatusMixin:
             to_date = datetime.now().strftime("%Y%m%d")
         
         path = "uapi/domestic-stock/v1/trading/inquire-balance"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
-        tr_id = "TTTC8434R" if USE_REALTIME_API else "VTTC8434R"
+        tr_id = "TTTC8434R" if config.use_realtime_api else "VTTC8434R"
         
         params = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "AFHR_FLPR_YN": "N",
             "OFL_YN": "N",
             "INQR_DVSN": "02",
@@ -376,7 +386,7 @@ class OrderStatusMixin:
             
         except Exception as e:
             logger.error(f"손익 현황 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 손익 현황 조회 실패: {e}")
+            send_message(f"[오류] 손익 현황 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_realized_profit_loss(self, from_date: str, to_date: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -399,6 +409,8 @@ class OrderStatusMixin:
             >>> api_client.get_realized_profit_loss("20230101")  # 2023년 1월 1일부터 현재까지의 실현 손익 조회
             >>> api_client.get_realized_profit_loss("20230101", "20230131")  # 2023년 1월 한 달간의 실현 손익 조회
         """
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
@@ -407,13 +419,13 @@ class OrderStatusMixin:
             to_date = datetime.now().strftime("%Y%m%d")
         
         path = "uapi/domestic-stock/v1/trading/inquire-ccnl"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
-        tr_id = "TTTC8494R" if USE_REALTIME_API else "VTTC8494R"
+        tr_id = "TTTC8494R" if config.use_realtime_api else "VTTC8494R"
         
         params = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "INQR_STRT_DT": from_date,
             "INQR_END_DT": to_date,
             "SLL_BUY_DVSN_CD": "00",  # 전체
@@ -473,5 +485,5 @@ class OrderStatusMixin:
             
         except Exception as e:
             logger.error(f"실현 손익 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 실현 손익 조회 실패: {e}")
+            send_message(f"[오류] 실현 손익 조회 실패: {e}", config.notification.discord_webhook_url)
             return None 

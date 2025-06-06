@@ -8,7 +8,7 @@ import logging
 from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING, cast
 from datetime import datetime
 
-from korea_stock_auto.config import URL_BASE
+from korea_stock_auto.config import get_config
 from korea_stock_auto.utils.utils import send_message
 
 # 타입 힌트만을 위한 조건부 임포트
@@ -42,11 +42,14 @@ class ChartDataMixin:
         Notes:
             모의투자와 실전투자 모두 지원하는 함수입니다.
         """
+
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/quotations/inquire-daily-price"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         params = {
             "fid_cond_mrkt_div_code": "J",  # 시장 구분 코드: J-주식
@@ -65,7 +68,7 @@ class ChartDataMixin:
             
         except Exception as e:
             logger.error(f"{code} 일별 주가 조회 중 예외 발생: {e}", exc_info=True)
-            send_message(f"[오류] {code} 일별 주가 조회 실패: {e}")
+            send_message(f"[오류] {code} 일별 주가 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_stock_data(self, code: str, period_div_code: str = "D") -> Optional[List[Dict[str, Any]]]:
@@ -87,8 +90,11 @@ class ChartDataMixin:
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
+        # 설정 로드
+        config = get_config()
+        
         path = "uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         period_name = {"D": "일봉", "W": "주봉", "M": "월봉"}.get(period_div_code, "일봉")
         
@@ -142,7 +148,7 @@ class ChartDataMixin:
             
         except Exception as e:
             logger.error(f"{code} {period_name} 데이터 조회 중 예외 발생: {e}", exc_info=True)
-            send_message(f"[오류] {code} {period_name} 데이터 조회 실패: {e}")
+            send_message(f"[오류] {code} {period_name} 데이터 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_daily_data(self, code: str, days: int = 30) -> Optional[List[Dict[str, Any]]]:
@@ -228,8 +234,11 @@ class ChartDataMixin:
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
+        # 설정 로드
+        config = get_config()
+        
         path = "uapi/domestic-stock/v1/quotations/inquire-time-conc"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 최대 100개로 제한
         if count > 100:
@@ -302,7 +311,7 @@ class ChartDataMixin:
             
         except Exception as e:
             logger.error(f"{code} 시간대별 체결 내역 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] {code} 시간대별 체결 내역 조회 실패: {e}")
+            send_message(f"[오류] {code} 시간대별 체결 내역 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def get_stock_minute_data(self, code: str, minute_unit: str = "1", count: int = 100) -> Optional[Dict[str, Any]]:
@@ -323,8 +332,11 @@ class ChartDataMixin:
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
+        # 설정 로드
+        config = get_config()
+        
         path = "uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 최대 100개로 제한
         if count > 100:
@@ -396,5 +408,5 @@ class ChartDataMixin:
             
         except Exception as e:
             logger.error(f"{code} 분봉 데이터 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] {code} 분봉 데이터 조회 실패: {e}")
+            send_message(f"[오류] {code} 분봉 데이터 조회 실패: {e}", config.notification.discord_webhook_url)
             return None 

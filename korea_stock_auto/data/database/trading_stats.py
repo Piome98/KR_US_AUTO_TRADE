@@ -108,7 +108,7 @@ class TradingStatsManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"거래 통계 저장 실패: {e}")
-            send_message(f"거래 통계 저장 실패: {e}")
+            send_message(f"거래 통계 저장 실패: {e}", config.notification.discord_webhook_url)
             return False
     
     def get_trading_stats(self, code: str, days: int = 30) -> pd.DataFrame:
@@ -142,7 +142,7 @@ class TradingStatsManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"거래 통계 조회 실패: {e}")
-            send_message(f"거래 통계 조회 실패: {e}")
+            send_message(f"거래 통계 조회 실패: {e}", config.notification.discord_webhook_url)
             return pd.DataFrame()
     
     def get_latest_trading_stats(self, code: str) -> Optional[Dict[str, Any]]:
@@ -177,7 +177,7 @@ class TradingStatsManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"최신 거래 통계 조회 실패: {e}")
-            send_message(f"최신 거래 통계 조회 실패: {e}")
+            send_message(f"최신 거래 통계 조회 실패: {e}", config.notification.discord_webhook_url)
             return None
     
     def calculate_investor_flow(self, code: str, days: int = 5) -> Dict[str, Any]:
@@ -219,5 +219,5 @@ class TradingStatsManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"투자자별 자금 흐름 계산 실패: {e}")
-            send_message(f"투자자별 자금 흐름 계산 실패: {e}")
+            send_message(f"투자자별 자금 흐름 계산 실패: {e}", config.notification.discord_webhook_url)
             return {} 

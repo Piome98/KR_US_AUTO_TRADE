@@ -102,7 +102,7 @@ class NewsDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"뉴스 이벤트 저장 실패: {e}")
-            send_message(f"뉴스 이벤트 저장 실패: {e}")
+            send_message(f"뉴스 이벤트 저장 실패: {e}", config.notification.discord_webhook_url)
             return False
     
     def get_news_events(self, code: Optional[str] = None, days: int = 7) -> pd.DataFrame:
@@ -147,7 +147,7 @@ class NewsDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"뉴스 이벤트 조회 실패: {e}")
-            send_message(f"뉴스 이벤트 조회 실패: {e}")
+            send_message(f"뉴스 이벤트 조회 실패: {e}", config.notification.discord_webhook_url)
             return pd.DataFrame()
     
     def get_news_by_sentiment(self, min_sentiment: float = 0.5, days: int = 7) -> pd.DataFrame:
@@ -182,7 +182,7 @@ class NewsDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"감성 분석 기반 뉴스 조회 실패: {e}")
-            send_message(f"감성 분석 기반 뉴스 조회 실패: {e}")
+            send_message(f"감성 분석 기반 뉴스 조회 실패: {e}", config.notification.discord_webhook_url)
             return pd.DataFrame()
     
     def search_news_by_keyword(self, keyword: str, days: int = 30) -> pd.DataFrame:
@@ -221,5 +221,5 @@ class NewsDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"키워드 기반 뉴스 검색 실패: {e}")
-            send_message(f"키워드 기반 뉴스 검색 실패: {e}")
+            send_message(f"키워드 기반 뉴스 검색 실패: {e}", config.notification.discord_webhook_url)
             return pd.DataFrame() 

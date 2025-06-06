@@ -119,7 +119,7 @@ class TechnicalDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"기술적 지표 저장 실패: {e}")
-            send_message(f"기술적 지표 저장 실패: {e}")
+            send_message(f"기술적 지표 저장 실패: {e}", config.notification.discord_webhook_url)
             return False
     
     def get_technical_indicators(self, code: str, days: int = 30) -> pd.DataFrame:
@@ -154,7 +154,7 @@ class TechnicalDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"기술적 지표 조회 실패: {e}")
-            send_message(f"기술적 지표 조회 실패: {e}")
+            send_message(f"기술적 지표 조회 실패: {e}", config.notification.discord_webhook_url)
             return pd.DataFrame()
     
     def get_latest_indicators(self, code: str) -> Optional[Dict[str, Any]]:
@@ -190,5 +190,5 @@ class TechnicalDataManager(DatabaseManager):
             
         except Exception as e:
             logger.error(f"최신 기술적 지표 조회 실패: {e}")
-            send_message(f"최신 기술적 지표 조회 실패: {e}")
+            send_message(f"최신 기술적 지표 조회 실패: {e}", config.notification.discord_webhook_url)
             return None 

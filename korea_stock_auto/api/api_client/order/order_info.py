@@ -9,9 +9,7 @@ import requests
 import logging
 from typing import Dict, List, Optional, Any, TYPE_CHECKING, cast
 
-from korea_stock_auto.config import (
-    URL_BASE, CANO, ACNT_PRDT_CD, USE_REALTIME_API
-)
+from korea_stock_auto.config import get_config
 from korea_stock_auto.utils.utils import send_message
 
 # 타입 힌트만을 위한 조건부 임포트
@@ -45,18 +43,21 @@ class OrderInfoMixin:
             >>> api_client.get_pending_orders()  # 전체 미체결 주문 조회
             >>> api_client.get_pending_orders("005930")  # 삼성전자 미체결 주문만 조회
         """
+
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
         path = "uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 트랜잭션 ID는 실전/모의 환경에 따라 다름
-        tr_id = "TTTC8036R" if USE_REALTIME_API else "VTTC8036R"
+        tr_id = "TTTC8036R" if config.use_realtime_api else "VTTC8036R"
         
         params = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "CTX_AREA_FK100": "",
             "CTX_AREA_NK100": "",
             "INQR_DVSN_1": "0",
@@ -108,7 +109,7 @@ class OrderInfoMixin:
             
         except Exception as e:
             logger.error(f"미체결 주문 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] 미체결 주문 조회 실패: {e}")
+            send_message(f"[오류] 미체결 주문 조회 실패: {e}", config.notification.discord_webhook_url)
             return []
     
     def get_daily_orders(self, date: Optional[str] = None, code: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -130,6 +131,8 @@ class OrderInfoMixin:
             >>> api_client.get_daily_orders("20230901")  # 2023년 9월 1일 주문 내역 조회
             >>> api_client.get_daily_orders(code="005930")  # 삼성전자 당일 주문 내역 조회
         """
+        # 설정 로드
+        config = get_config()
         # type hint를 위한 self 타입 지정
         self = cast("KoreaInvestmentApiClient", self)
         
@@ -138,14 +141,14 @@ class OrderInfoMixin:
             date = datetime.datetime.now().strftime("%Y%m%d")
         
         path = "uapi/domestic-stock/v1/trading/inquire-daily-ccld"
-        url = f"{URL_BASE}/{path}"
+        url = f"{config.current_api.base_url}/{path}"
         
         # 트랜잭션 ID는 실전/모의 환경에 따라 다름
-        tr_id = "TTTC8001R" if USE_REALTIME_API else "VTTC8001R"
+        tr_id = "TTTC8001R" if config.use_realtime_api else "VTTC8001R"
         
         params = {
-            "CANO": CANO,
-            "ACNT_PRDT_CD": ACNT_PRDT_CD,
+            "CANO": config.current_api.account_number,
+            "ACNT_PRDT_CD": config.current_api.account_product_code,
             "INQR_STRT_DT": date,
             "INQR_END_DT": date,
             "SLL_BUY_DVSN_CD": "00",  # 전체(00), 매도(01), 매수(02)
@@ -203,5 +206,5 @@ class OrderInfoMixin:
             
         except Exception as e:
             logger.error(f"{date} 주문 내역 조회 실패: {e}", exc_info=True)
-            send_message(f"[오류] {date} 주문 내역 조회 실패: {e}")
+            send_message(f"[오류] {date} 주문 내역 조회 실패: {e}", config.notification.discord_webhook_url)
             return [] 
