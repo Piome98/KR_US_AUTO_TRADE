@@ -8,6 +8,10 @@ import datetime
 import pandas as pd
 import json
 from korea_stock_auto.utils import send_message
+from korea_stock_auto.config import AppConfig
+
+# 전역 설정 로드
+config = AppConfig()
 from korea_stock_auto.data.database import DatabaseManager
 from korea_stock_auto.reinforcement.rl_data.data_fetcher import DataFetcher
 from korea_stock_auto.reinforcement.rl_data.rl_data_manager import RLDataManager
@@ -82,25 +86,26 @@ def train_model(args):
         )
         
         # 추가: 거래량 상위 종목 및 실시간 시세 데이터 수집 (모델 강화 목적)
-        from korea_stock_auto.api.api_client.market.stock_info import StockInfoMixin
-        from korea_stock_auto.api.api_client.market.price import MarketPriceMixin
-        from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
+        from korea_stock_auto.api.client import KoreaInvestmentApiClient
         from korea_stock_auto.reinforcement.rl_data.data_fetcher import DataFetcher
         
         # 거래량 상위 종목 정보 수집 (관련 종목 분석용)
         try:
             send_message(f"거래량 상위 종목 정보 수집 시작", config.notification.discord_webhook_url)
-            api_client = KoreaInvestmentApiClient()
+            api_client = KoreaInvestmentApiClient(config)
             
             # 일반 거래량 순위
             top_stocks = api_client.get_top_traded_stocks(market_type="0", top_n=10)
             
-            # 거래량 급증 종목 정보 (신규)
-            increasing_stocks = api_client.get_volume_increasing_stocks(market_type="0", top_n=10)
+            # 거래량 급증 종목 정보 (신규) - 메서드가 없을 수 있으므로 안전하게 처리
+            try:
+                increasing_stocks = api_client.get_volume_increasing_stocks(market_type="0", top_n=10)
+            except (AttributeError, Exception):
+                increasing_stocks = None
             
             # 주요 거래 종목 파악 및 관련 정보 출력
             if top_stocks:
-                send_message(f"현재 거래량 상위 종목: {', '.join([s['name'] for s in top_stocks[:5]])}")
+                send_message(f"현재 거래량 상위 종목: {', '.join([s['name'] for s in top_stocks[:5]])}", config.notification.discord_webhook_url)
                 
                 # 거래량 상위 종목 관련 추가 데이터 수집 (대상 종목 포함 여부 확인)
                 if args.code in [s['code'] for s in top_stocks]:
@@ -109,7 +114,7 @@ def train_model(args):
             
             # 거래량 급증 종목 정보 출력
             if increasing_stocks:
-                send_message(f"현재 거래량 급증 종목: {', '.join([s['name'] for s in increasing_stocks[:5]])}")
+                send_message(f"현재 거래량 급증 종목: {', '.join([s['name'] for s in increasing_stocks[:5]])}", config.notification.discord_webhook_url)
                 
                 # 거래량 급증 종목에 포함되어 있는지 확인
                 if args.code in [s['code'] for s in increasing_stocks]:
@@ -141,7 +146,7 @@ def train_model(args):
                 change_rate = real_time_info.get("change_rate", 0)
                 bid_ask_ratio = real_time_info.get("bid_ask_ratio", 0)
                 
-                send_message(f"{args.code} 현재가: {current_price}원 ({change_rate}%, config.notification.discord_webhook_url), 매수/매도 비율: {bid_ask_ratio:.2f}")
+                send_message(f"{args.code} 현재가: {current_price}원 ({change_rate}%), 매수/매도 비율: {bid_ask_ratio:.2f}", config.notification.discord_webhook_url)
                 
                 # 시장 압력 지표 분석 (매수세/매도세 판단)
                 if bid_ask_ratio > 1.2:  # 매수세가 강한 경우
@@ -168,7 +173,7 @@ def train_model(args):
         if model_id is not None:
             send_message(f"모델 학습 완료: {model_id}", config.notification.discord_webhook_url)
             if results is not None:
-                send_message(f"테스트 결과: 수익률 {results['total_return']:.2f}%, 거래 횟수: {results['total_trades']}")
+                send_message(f"테스트 결과: 수익률 {results['total_return']:.2f}%, 거래 횟수: {results['total_trades']}", config.notification.discord_webhook_url)
         else:
             send_message("모델 학습 실패", config.notification.discord_webhook_url)
             
@@ -259,7 +264,7 @@ def test_model(args):
             buy_count = actions.count(1)
             sell_count = actions.count(2)
             
-            send_message(f"앙상블 모델 테스트 결과: 수익률 {total_return:.2f}%, 거래 횟수: {buy_count + sell_count}")
+            send_message(f"앙상블 모델 테스트 결과: 수익률 {total_return:.2f}%, 거래 횟수: {buy_count + sell_count}", config.notification.discord_webhook_url)
             
     except Exception as e:
         send_message(f"테스트 중 오류 발생: {e}", config.notification.discord_webhook_url)
@@ -282,7 +287,7 @@ def create_ensemble(args):
         if ensemble is None:
             send_message("앙상블 생성 실패", config.notification.discord_webhook_url)
         else:
-            send_message(f"앙상블 생성 완료: {len(ensemble.models, config.notification.discord_webhook_url)}개 모델")
+            send_message(f"앙상블 생성 완료: {len(ensemble.models)}개 모델", config.notification.discord_webhook_url)
             
     except Exception as e:
         send_message(f"앙상블 생성 중 오류 발생: {e}", config.notification.discord_webhook_url)
@@ -395,13 +400,13 @@ def backtest(args):
         win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
         
         # 백테스트 결과 출력
-        send_message(f"백테스트 결과 ({model_name}, {args.code})")
-        send_message(f"기간: {data.index[0].strftime('%Y-%m-%d', config.notification.discord_webhook_url)} ~ {data.index[-1].strftime('%Y-%m-%d')}")
-        send_message(f"초기 자본: {initial_balance:,.0f}원")
-        send_message(f"최종 자본: {final_balance:,.0f}원")
+        send_message(f"백테스트 결과 ({model_name}, {args.code})", config.notification.discord_webhook_url)
+        send_message(f"기간: {data.index[0].strftime('%Y-%m-%d')} ~ {data.index[-1].strftime('%Y-%m-%d')}", config.notification.discord_webhook_url)
+        send_message(f"초기 자본: {initial_balance:,.0f}원", config.notification.discord_webhook_url)
+        send_message(f"최종 자본: {final_balance:,.0f}원", config.notification.discord_webhook_url)
         send_message(f"총 수익률: {total_return:.2f}%", config.notification.discord_webhook_url)
-        send_message(f"거래 횟수: {total_trades}회 (매수: {buy_count}회, 매도: {sell_count}회)")
-        send_message(f"승률: {win_rate:.2f}% ({winning_trades}/{total_trades}, config.notification.discord_webhook_url)")
+        send_message(f"거래 횟수: {total_trades}회 (매수: {buy_count}회, 매도: {sell_count}회)", config.notification.discord_webhook_url)
+        send_message(f"승률: {win_rate:.2f}% ({winning_trades}/{total_trades})", config.notification.discord_webhook_url)
         
         # 연간 수익률 계산
         days = (data.index[-1] - data.index[0]).days
@@ -460,11 +465,11 @@ def compare_model_performance(args):
             return
         
         # 결과 출력
-        send_message(f"모델 비교 결과 ({args.code}, config.notification.discord_webhook_url)")
-        send_message(f"기간: {data.index[0].strftime('%Y-%m-%d', config.notification.discord_webhook_url)} ~ {data.index[-1].strftime('%Y-%m-%d')}")
+        send_message(f"모델 비교 결과 ({args.code})", config.notification.discord_webhook_url)
+        send_message(f"기간: {data.index[0].strftime('%Y-%m-%d')} ~ {data.index[-1].strftime('%Y-%m-%d')}", config.notification.discord_webhook_url)
         
         for _, row in results.iterrows():
-            send_message(f"모델: {row['model_id']}, 수익률: {row['total_return']:.2f}%, 거래 횟수: {row['total_trades']}")
+            send_message(f"모델: {row['model_id']}, 수익률: {row['total_return']:.2f}%, 거래 횟수: {row['total_trades']}", config.notification.discord_webhook_url)
         
         send_message(f"비교 결과 저장 완료: {output_path}", config.notification.discord_webhook_url)
         
@@ -488,7 +493,7 @@ def list_models(args):
             return
         
         # 결과 출력
-        send_message(f"사용 가능한 모델 목록 ({len(models, config.notification.discord_webhook_url)}개)")
+        send_message(f"사용 가능한 모델 목록 ({len(models)}개)", config.notification.discord_webhook_url)
         
         for model in models:
             created_at = model.get('created_at', 'N/A')
@@ -496,7 +501,7 @@ def list_models(args):
             total_return = model.get('total_return', 0)
             training_code = model.get('training_code', 'N/A')
             
-            send_message(f"ID: {model['model_id']}, 유형: {model_type}, 학습 종목: {training_code}, 수익률: {total_return:.2f}%, 생성일: {created_at}")
+            send_message(f"ID: {model['model_id']}, 유형: {model_type}, 학습 종목: {training_code}, 수익률: {total_return:.2f}%, 생성일: {created_at}", config.notification.discord_webhook_url)
         
     except Exception as e:
         send_message(f"모델 목록 조회 중 오류 발생: {e}", config.notification.discord_webhook_url)

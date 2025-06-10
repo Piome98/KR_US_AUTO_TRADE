@@ -18,11 +18,16 @@ from korea_stock_auto.domain import Portfolio, Stock, Position
 from korea_stock_auto.domain import Money, Price, Quantity
 from korea_stock_auto.domain import PortfolioDomainService
 
+# API 매퍼 통합
+from korea_stock_auto.api.mappers import (
+    PortfolioMapper, AccountMapper, StockMapper, MappingError
+)
+
 logger = logging.getLogger(__name__)
 
 
 class PortfolioService:
-    """포트폴리오 관리 서비스 (도메인 엔터티 통합)"""
+    """포트폴리오 관리 서비스 (도메인 엔터티 통합 + API 매퍼 통합)"""
     
     def __init__(self, api: KoreaInvestmentApiClient, config: AppConfig):
         """
@@ -34,6 +39,20 @@ class PortfolioService:
         """
         self.api = api
         self.config = config
+        
+        # API 매퍼 초기화
+        self.portfolio_mapper = PortfolioMapper(
+            enable_cache=True, 
+            cache_ttl_seconds=120  # 포트폴리오 데이터는 2분 캐시
+        )
+        self.account_mapper = AccountMapper(
+            enable_cache=True,
+            cache_ttl_seconds=60   # 계좌 데이터는 1분 캐시
+        )
+        self.stock_mapper = StockMapper(
+            enable_cache=True,
+            cache_ttl_seconds=30   # 주식 데이터는 30초 캐시
+        )
         
         # 도메인 엔터티
         self.portfolio: Portfolio = Portfolio(cash=Money.zero())
@@ -48,7 +67,7 @@ class PortfolioService:
         self.last_account_update_time: float = 0
         self.account_update_interval: int = config.system.account_update_interval
         
-        logger.debug("PortfolioService 초기화 완료 (도메인 엔터티 통합)")
+        logger.debug("PortfolioService 초기화 완료 (도메인 엔터티 + API 매퍼 통합)")
     
     def initialize(self) -> bool:
         """
@@ -67,7 +86,7 @@ class PortfolioService:
     
     def update_account_info(self, force: bool = False) -> bool:
         """
-        계좌 정보 및 보유 종목 정보 업데이트
+        계좌 정보 및 보유 종목 정보 업데이트 (API 매퍼 통합)
         
         Args:
             force: 강제 업데이트 여부 (interval 무시)
@@ -81,25 +100,26 @@ class PortfolioService:
             return True
         
         try:
-            # 계좌 잔고 조회
-            balance_info = self.api.get_balance()
-            if balance_info:
-                cash_amount = balance_info.get("cash", 0)
-                self.portfolio.cash = Money.won(cash_amount)
-                self.total_cash = cash_amount  # 백워드 호환성
-                logger.debug(f"계좌 잔고 업데이트: {self.portfolio.cash}")
-            else:
+            # 계좌 잔고 조회 (API 호출)
+            balance_info = self.api.get_account_balance()
+            if not balance_info:
                 logger.warning("계좌 잔고 정보 조회 실패")
                 return False
             
-            # 보유 종목 조회
-            stock_balance = self.api.get_stock_balance()
-            if stock_balance and "stocks" in stock_balance:
-                self._update_stock_holdings(stock_balance["stocks"])
-                logger.debug(f"보유 종목 업데이트: {self.portfolio.get_position_count()}개")
-            else:
-                logger.warning("보유 종목 정보 조회 실패")
-                return False
+            # 매퍼를 통한 Portfolio 엔터티 생성
+            try:
+                self.portfolio = self.portfolio_mapper.map_from_balance_response(balance_info)
+                
+                # 백워드 호환성을 위한 데이터 동기화
+                self.total_cash = self.portfolio.cash.to_float()
+                self._sync_legacy_data_from_portfolio()
+                
+                logger.debug(f"Portfolio 엔터티 업데이트 완료: 현금 {self.portfolio.cash}, 보유종목 {self.portfolio.get_position_count()}개")
+                
+            except MappingError as e:
+                logger.error(f"Portfolio 매핑 실패: {e}")
+                # 백워드 호환성: 기존 방식으로 처리
+                return self._update_account_info_legacy(balance_info)
             
             self.last_account_update_time = current_time
             return True
@@ -108,9 +128,125 @@ class PortfolioService:
             logger.error(f"계좌 정보 업데이트 실패: {e}")
             return False
     
+    def _sync_legacy_data_from_portfolio(self) -> None:
+        """Portfolio 엔터티에서 백워드 호환성 데이터 동기화"""
+        self.bought_list.clear()
+        self.stock_dict.clear()
+        self.entry_prices.clear()
+        
+        for code, position in self.portfolio.positions.items():
+            # 매수 종목 리스트 업데이트
+            self.bought_list.append(code)
+            
+            # 종목 정보 딕셔너리 업데이트 (기존 API 형식으로 변환)
+            self.stock_dict[code] = {
+                'code': position.stock.code,
+                'prdt_name': position.stock.name,
+                'hldg_qty': str(position.quantity.value),
+                'pchs_avg_pric': str(int(position.average_price.value.to_float())),
+                'prpr': str(int(position.stock.current_price.value.to_float())),
+                'evlu_amt': str(int(position.current_value().to_float())),
+                'pchs_amt': str(int(position.purchase_amount().to_float())),
+                'evlu_pfls_amt': str(int(position.unrealized_profit_loss().to_float())),
+                'evlu_pfls_rt': f"{position.unrealized_profit_loss_percentage():.2f}",
+                'sll_able_qty': str(position.quantity.value)
+            }
+            
+            # 진입가 업데이트
+            self.entry_prices[code] = position.average_price.value.to_float()
+    
+    def _update_account_info_legacy(self, balance_info: Dict[str, Any]) -> bool:
+        """기존 방식의 계좌 정보 업데이트 (백워드 호환성)"""
+        try:
+            # 현금 정보 업데이트
+            cash_amount = balance_info.get("cash", 0)
+            self.portfolio.cash = Money.won(cash_amount)
+            self.total_cash = cash_amount
+            logger.debug(f"계좌 잔고 업데이트 (legacy): {self.portfolio.cash}")
+            
+            # 보유 종목 조회
+            stock_balance = self.api.get_stock_balance()
+            if stock_balance and "stocks" in stock_balance:
+                self._update_stock_holdings_legacy(stock_balance["stocks"])
+                logger.debug(f"보유 종목 업데이트 (legacy): {self.portfolio.get_position_count()}개")
+                return True
+            else:
+                logger.warning("보유 종목 정보 조회 실패")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Legacy 계좌 정보 업데이트 실패: {e}")
+            return False
+    
     def _update_stock_holdings(self, stocks: List[Dict[str, Any]]) -> None:
         """
-        보유 종목 정보 업데이트 (도메인 엔터티 사용)
+        보유 종목 정보 업데이트 (API 매퍼 통합 버전)
+        
+        Args:
+            stocks: API에서 조회한 보유 종목 리스트
+        """
+        # 기존 포지션 백업
+        previous_positions = dict(self.portfolio.positions)
+        
+        # 새로운 포트폴리오 데이터로 업데이트
+        new_positions = {}
+        updated_stock_dict = {}
+        updated_bought_list = []
+        updated_entry_prices = {}
+        
+        for stock_data in stocks:
+            try:
+                # StockMapper를 통한 Stock 엔터티 생성
+                stock = self.stock_mapper.map_from_balance_response(stock_data)
+                
+                # Position 데이터 추출
+                quantity_value = int(stock_data.get("hldg_qty", 0))
+                if quantity_value <= 0:
+                    continue
+                
+                avg_price_value = float(stock_data.get("pchs_avg_pric", 0))
+                
+                # Position 엔터티 생성
+                position = Position(
+                    stock=stock,
+                    quantity=Quantity(quantity_value),
+                    average_price=Price.won(avg_price_value)
+                )
+                
+                new_positions[stock.code] = position
+                
+                # 백워드 호환성을 위한 데이터 유지
+                updated_stock_dict[stock.code] = stock_data
+                updated_bought_list.append(stock.code)
+                updated_entry_prices[stock.code] = avg_price_value
+                
+                # 새로운 포지션 로깅
+                if stock.code not in previous_positions:
+                    logger.info(f"새로운 보유 종목 감지: {stock.code}({stock.name}), 진입가: {avg_price_value:,}")
+                    
+            except MappingError as e:
+                logger.warning(f"종목 {stock_data.get('code', 'Unknown')} 매핑 실패: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"종목 {stock_data.get('code', 'Unknown')} 데이터 처리 중 오류: {e}")
+                continue
+        
+        # 포트폴리오 업데이트
+        self.portfolio.positions = new_positions
+        
+        # 백워드 호환성 데이터 업데이트
+        self.stock_dict = updated_stock_dict
+        self.bought_list = updated_bought_list
+        self.entry_prices = updated_entry_prices
+        
+        # 매도된 종목 로깅
+        sold_stocks = set(previous_positions.keys()) - set(new_positions.keys())
+        for code in sold_stocks:
+            logger.info(f"매도 완료된 종목 정리: {code}")
+    
+    def _update_stock_holdings_legacy(self, stocks: List[Dict[str, Any]]) -> None:
+        """
+        보유 종목 정보 업데이트 (기존 방식, 백워드 호환성)
         
         Args:
             stocks: API에서 조회한 보유 종목 리스트
@@ -181,104 +317,80 @@ class PortfolioService:
         for code in sold_stocks:
             logger.info(f"매도 완료된 종목 정리: {code}")
     
-    def add_position(self, code: str, entry_price: float, quantity: int = 0) -> None:
+    def add_position(self, position: Position) -> None:
         """
         새로운 포지션 추가 (도메인 엔터티 사용)
         
         Args:
-            code: 종목 코드
-            entry_price: 진입가
-            quantity: 수량 (선택적)
+            position: 포지션 엔터티
         """
         try:
-            # Stock 엔터티 생성 (기본값으로)
-            stock = Stock(
-                code=code,
-                name=code,  # 이름은 추후 API에서 업데이트
-                current_price=Price.won(entry_price),
-                previous_close=Price.won(entry_price)
+            code = position.stock.code
+            
+            # 포트폴리오에 포지션 추가/업데이트
+            self.portfolio.add_position(
+                position.stock, 
+                position.quantity, 
+                position.average_price
             )
             
-            if quantity > 0:
-                # 포트폴리오에 포지션 추가
-                self.portfolio.add_position(
-                    stock=stock,
-                    quantity=Quantity(quantity),
-                    price=Price.won(entry_price)
-                )
+            # 백워드 호환성 데이터 동기화
+            self._sync_legacy_data_from_portfolio()
             
-            # 백워드 호환성 유지
-            if code not in self.bought_list:
-                self.bought_list.append(code)
-            self.entry_prices[code] = entry_price
-            
-            if quantity > 0:
-                self.stock_dict[code] = {
-                    "code": code,
-                    "hldg_qty": quantity,
-                    "pchs_avg_pric": entry_price
-                }
-            
-            logger.info(f"포지션 추가: {code}, 진입가: {entry_price:,}")
+            logger.info(f"포지션 추가 완료: {position}")
             
         except Exception as e:
-            logger.error(f"포지션 추가 중 오류: {e}")
+            logger.error(f"포지션 추가 실패: {e}")
+            raise
     
-    def remove_position(self, code: str) -> bool:
+    def get_account_balance(self) -> Optional[Dict[str, Any]]:
         """
-        포지션 제거 (도메인 엔터티 사용)
+        계좌 잔고 정보 조회 (API 매퍼 통합)
         
-        Args:
-            code: 종목 코드
-            
         Returns:
-            bool: 제거 성공 여부
+            Dict: 계좌 잔고 정보 또는 None
         """
         try:
-            # 도메인 포트폴리오에서 제거
-            if code in self.portfolio.positions:
-                del self.portfolio.positions[code]
+            # API에서 잔고 정보 조회
+            balance_info = self.api.get_account_balance()
+            if not balance_info:
+                return None
             
-            # 백워드 호환성 데이터 제거
-            if code in self.bought_list:
-                self.bought_list.remove(code)
-            if code in self.entry_prices:
-                del self.entry_prices[code]
-            if code in self.stock_dict:
-                del self.stock_dict[code]
-            
-            logger.info(f"포지션 제거: {code}")
-            return True
-            
+            # AccountMapper를 통한 변환
+            try:
+                account_balance = self.account_mapper.map_from_balance_response(balance_info)
+                
+                return {
+                    'cash': account_balance.cash.to_float(),
+                    'stock_value': account_balance.stock_value.to_float(),
+                    'total_assets': account_balance.total_assets.to_float(),
+                    'total_profit_loss': account_balance.total_profit_loss.to_float(),
+                    'profit_loss_rate': account_balance.profit_loss_rate,
+                    'updated_at': account_balance.updated_at
+                }
+                
+            except MappingError as e:
+                logger.warning(f"AccountBalance 매핑 실패, 기존 방식 사용: {e}")
+                # 백워드 호환성: 기존 방식으로 반환
+                return balance_info
+                
         except Exception as e:
-            logger.error(f"포지션 제거 중 오류: {e}")
-            return False
-    
-    def get_position_info(self, code: str) -> Optional[Dict[str, Any]]:
-        """
-        특정 종목의 포지션 정보 조회 (도메인 엔터티 사용)
-        
-        Args:
-            code: 종목 코드
-            
-        Returns:
-            Dict: 포지션 정보 (없으면 None)
-        """
-        position = self.portfolio.get_position(code)
-        if position is None:
+            logger.error(f"계좌 잔고 조회 실패: {e}")
             return None
-        
+    
+    def clear_mappers_cache(self) -> None:
+        """매퍼 캐시 전체 삭제"""
+        self.portfolio_mapper.clear_cache()
+        self.account_mapper.clear_cache()
+        self.stock_mapper.clear_cache()
+        logger.debug("모든 매퍼 캐시 삭제 완료")
+    
+    def get_mappers_cache_stats(self) -> Dict[str, Any]:
+        """매퍼 캐시 통계 조회"""
         return {
-            "code": code,
-            "name": position.stock.name,
-            "quantity": position.quantity.value,
-            "entry_price": position.average_price.value.to_float(),
-            "current_price": position.stock.current_price.value.to_float(),
-            "total_cost": position.total_cost().to_float(),
-            "current_value": position.current_value().to_float(),
-            "unrealized_pnl": position.unrealized_pnl().to_float(),
-            "unrealized_pnl_pct": position.unrealized_pnl_percentage().value,
-            "is_profitable": position.is_profitable()
+            'portfolio_mapper': self.portfolio_mapper.get_cache_stats(),
+            'account_mapper': self.account_mapper.get_cache_stats(),
+            'stock_mapper': self.stock_mapper.get_cache_stats()
         }
     
     def calculate_portfolio_value(self, current_prices: Dict[str, float]) -> Dict[str, float]:
@@ -435,4 +547,92 @@ class PortfolioService:
     
     def get_domain_position(self, code: str) -> Optional[Position]:
         """특정 종목의 도메인 Position 엔터티 반환"""
-        return self.portfolio.get_position(code) 
+        return self.portfolio.get_position(code)
+    
+    def add_position_legacy(self, code: str, entry_price: float, quantity: int = 0) -> None:
+        """
+        새로운 포지션 추가 (Legacy 백워드 호환성)
+        
+        Args:
+            code: 종목 코드
+            entry_price: 진입가
+            quantity: 수량 (선택적)
+        """
+        try:
+            # Stock 엔터티 생성 (기본값으로)
+            stock = Stock(
+                code=code,
+                name=code,  # 이름은 추후 API에서 업데이트
+                current_price=Price.won(entry_price),
+                previous_close=Price.won(entry_price)
+            )
+            
+            # Position 엔터티 생성
+            position = Position(
+                stock=stock,
+                quantity=Quantity(quantity) if quantity > 0 else Quantity.zero(),
+                average_price=Price.won(entry_price)
+            )
+            
+            # 새로운 메서드 호출
+            self.add_position(position)
+            
+        except Exception as e:
+            logger.error(f"Legacy 포지션 추가 중 오류: {e}")
+    
+    def remove_position(self, code: str) -> bool:
+        """
+        포지션 제거 (도메인 엔터티 사용)
+        
+        Args:
+            code: 종목 코드
+        
+        Returns:
+            bool: 제거 성공 여부
+        """
+        try:
+            # 도메인 포트폴리오에서 제거
+            if code in self.portfolio.positions:
+                del self.portfolio.positions[code]
+            
+            # 백워드 호환성 데이터 제거
+            if code in self.bought_list:
+                self.bought_list.remove(code)
+            if code in self.entry_prices:
+                del self.entry_prices[code]
+            if code in self.stock_dict:
+                del self.stock_dict[code]
+            
+            logger.info(f"포지션 제거: {code}")
+            return True
+                
+        except Exception as e:
+            logger.error(f"포지션 제거 중 오류: {e}")
+            return False
+    
+    def get_position_info(self, code: str) -> Optional[Dict[str, Any]]:
+        """
+        특정 종목의 포지션 정보 조회 (도메인 엔터티 사용)
+        
+        Args:
+            code: 종목 코드
+            
+        Returns:
+            Dict: 포지션 정보 (없으면 None)
+        """
+        position = self.portfolio.get_position(code)
+        if position is None:
+            return None
+        
+        return {
+            "code": code,
+            "name": position.stock.name,
+            "quantity": position.quantity.value,
+            "entry_price": position.average_price.value.to_float(),
+            "current_price": position.stock.current_price.value.to_float(),
+            "total_cost": position.total_cost().to_float(),
+            "current_value": position.current_value().to_float(),
+            "unrealized_pnl": position.unrealized_pnl().to_float(),
+            "unrealized_pnl_pct": position.unrealized_pnl_percentage().value,
+            "is_profitable": position.is_profitable()
+        } 

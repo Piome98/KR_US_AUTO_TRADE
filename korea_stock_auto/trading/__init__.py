@@ -2,7 +2,7 @@
 한국 주식 자동매매 - 트레이딩 패키지
 """
 
-from korea_stock_auto.trading.trader import Trader
+from korea_stock_auto.trading.trader_v2 import TraderV2
 from korea_stock_auto.trading.stock_selector import StockSelector
 from korea_stock_auto.trading.technical_analyzer import TechnicalAnalyzer
 from korea_stock_auto.trading.trade_executor import TradeExecutor
@@ -15,7 +15,7 @@ from korea_stock_auto.trading.trading_strategy import (
 )
 
 __all__ = [
-    'Trader',
+    'TraderV2',
     'StockSelector',
     'TechnicalAnalyzer',
     'TradeExecutor',

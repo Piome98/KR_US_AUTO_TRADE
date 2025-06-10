@@ -23,9 +23,6 @@ from korea_stock_auto.api.auth import (
     get_access_token, refresh_token_if_needed, 
     is_token_valid, verify_token_status
 )
-from korea_stock_auto.api.api_client.market.historical_price import HistoricalPriceMixin
-from korea_stock_auto.api.api_client.market.price import MarketPriceMixin
-from korea_stock_auto.api.api_client.order.stock import StockOrderMixin
 
 # 로깅 설정
 logger = logging.getLogger("stock_auto")
@@ -34,8 +31,8 @@ logger = logging.getLogger("stock_auto")
 T = TypeVar('T')
 ResponseDict = Dict[str, Any]
 
-# 클래스 정의를 먼저 하고 나중에 Mixin 클래스들을 적용
-class KoreaInvestmentApiClient(HistoricalPriceMixin, MarketPriceMixin, StockOrderMixin):
+# 컴포지션 패턴으로 변경된 API 클라이언트
+class KoreaInvestmentApiClient:
     """
     한국투자증권 API 클라이언트
     
@@ -56,13 +53,19 @@ class KoreaInvestmentApiClient(HistoricalPriceMixin, MarketPriceMixin, StockOrde
         self.last_request_time: float = 0
         self.request_interval: float = 0.1  # 최소 API 호출 간격(초)
         
-        # HistoricalPriceMixin에서 필요한 속성들
+        # API 속성들
         self.base_url = config.current_api.base_url
         self.app_key = config.current_api.app_key
         self.app_secret = config.current_api.app_secret
         
         # 액세스 토큰 발급
         self.issue_access_token()
+        
+        # 컴포지션 패턴: 각 도메인별 서비스 초기화
+        from korea_stock_auto.api.clients import MarketService, OrderService, AccountService
+        self.market_service = MarketService(self)
+        self.order_service = OrderService(self)
+        self.account_service = AccountService(self)
     
     def _get_cache_path(self, filename: str) -> str:
         """
@@ -74,7 +77,7 @@ class KoreaInvestmentApiClient(HistoricalPriceMixin, MarketPriceMixin, StockOrde
         Returns:
             str: 캐시 파일의 전체 경로
         """
-        return os.path.join(os.path.dirname(__file__), '../../../../data/cache', filename)
+        return os.path.join(os.path.dirname(__file__), '../../../data/cache', filename)
     
     def issue_access_token(self) -> bool:
         """
@@ -231,11 +234,10 @@ class KoreaInvestmentApiClient(HistoricalPriceMixin, MarketPriceMixin, StockOrde
         response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
         return self._handle_response(response, error_msg)
 
-    # Trader 클래스에서 호출하는 get_current_price 메소드 추가
-    # 실제 로직은 MarketPriceMixin의 get_real_time_price_by_api를 사용
+    # 기존 인터페이스 호환성을 위한 프록시 메서드들
     def get_current_price(self, stock_code: str) -> Optional[Dict[str, Any]]:
         """
-        특정 종목의 현재가 정보를 조회합니다. (get_real_time_price_by_api의 별칭)
+        특정 종목의 현재가 정보를 조회합니다.
         
         Args:
             stock_code: 종목 코드
@@ -243,34 +245,130 @@ class KoreaInvestmentApiClient(HistoricalPriceMixin, MarketPriceMixin, StockOrde
         Returns:
             dict or None: 현재가 정보 또는 조회 실패 시 None
         """
-        # MarketPriceMixin에 해당 메소드가 동적으로 추가되므로, static analyzer는 찾지 못할 수 있음
-        # hasattr를 사용하여 안전하게 호출하거나, Mixin 적용 방식에 따라 직접 호출 가능
-        if hasattr(self, 'get_real_time_price_by_api'):
-            return self.get_real_time_price_by_api(stock_code)
-        else:
-            logger.error("'get_real_time_price_by_api' 메소드를 찾을 수 없습니다. Mixin이 올바르게 적용되었는지 확인하세요.")
-            return None
-
-# 클래스 정의 후에 Mixin 클래스들을 임포트하고 적용
-from korea_stock_auto.api.api_client.account.balance import AccountBalanceMixin
-from korea_stock_auto.api.api_client.account.deposit import AccountDepositMixin
-from korea_stock_auto.api.api_client.market.stock_info import StockInfoMixin
-from korea_stock_auto.api.api_client.market.chart import ChartDataMixin
-from korea_stock_auto.api.api_client.order.status import OrderStatusMixin
-from korea_stock_auto.api.api_client.sector.index import SectorIndexMixin
-from korea_stock_auto.api.api_client.sector.info import SectorInfoMixin
-
-# 다중 상속을 통해 Mixin 클래스들의 메서드를 KoreaInvestmentApiClient에 추가
-for mixin in [
-    AccountBalanceMixin, 
-    AccountDepositMixin,
-    StockInfoMixin,
-    ChartDataMixin,
-    StockOrderMixin,
-    OrderStatusMixin,
-    SectorIndexMixin,
-    SectorInfoMixin
-]:
-    for name, method in mixin.__dict__.items():
-        if not name.startswith('_') and callable(method):
-            setattr(KoreaInvestmentApiClient, name, method) 
+        return self.market_service.get_current_price(stock_code)
+    
+    def get_real_time_price_by_api(self, code: str) -> Optional[Dict[str, Any]]:
+        """
+        실시간 시세 조회 API (MarketService로 위임)
+        
+        Args:
+            code: 종목 코드
+            
+        Returns:
+            dict or None: 실시간 시세 정보
+        """
+        return self.market_service.get_real_time_price_by_api(code)
+    
+    def fetch_stock_current_price(self, code: str) -> Optional[Dict[str, Any]]:
+        """
+        주식 현재가 조회 (MarketService로 위임)
+        
+        Args:
+            code: 종목 코드
+            
+        Returns:
+            dict or None: 주식 현재가 정보
+        """
+        return self.market_service.fetch_stock_current_price(code)
+    
+    def buy_stock(self, code: str, qty: int, price: Optional[int] = None) -> bool:
+        """
+        주식 매수 (OrderService로 위임)
+        
+        Args:
+            code: 종목 코드
+            qty: 주문 수량
+            price: 주문 가격
+            
+        Returns:
+            bool: 매수 성공 여부
+        """
+        return self.order_service.buy_stock(code, qty, price)
+    
+    def sell_stock(self, code: str, qty: int, price: Optional[int] = None) -> bool:
+        """
+        주식 매도 (OrderService로 위임)
+        
+        Args:
+            code: 종목 코드
+            qty: 주문 수량
+            price: 주문 가격
+            
+        Returns:
+            bool: 매도 성공 여부
+        """
+        return self.order_service.sell_stock(code, qty, price)
+    
+    def fetch_buyable_amount(self, code: str, price: int = 0) -> Optional[Dict[str, Any]]:
+        """
+        매수 가능 금액 조회 (OrderService로 위임)
+        
+        Args:
+            code: 종목 코드
+            price: 주문 가격
+            
+        Returns:
+            dict or None: 매수 가능 정보
+        """
+        return self.order_service.fetch_buyable_amount(code, price)
+    
+    def get_account_balance(self) -> Optional[Dict[str, Any]]:
+        """
+        계좌 잔고 조회 (AccountService로 위임)
+        
+        Returns:
+            dict or None: 계좌 정보
+        """
+        return self.account_service.get_account_balance()
+    
+    def get_deposit_info(self) -> Optional[Dict[str, Any]]:
+        """
+        예수금 정보 조회 (AccountService로 위임)
+        
+        Returns:
+            dict or None: 예수금 정보
+        """
+        return self.account_service.get_deposit_info()
+    
+    def get_top_traded_stocks(self, market_type: str = "0", top_n: int = 20) -> Optional[List[Dict[str, Any]]]:
+        """
+        거래량 상위 종목 조회
+        
+        Args:
+            market_type: 시장 구분 ("0": 전체, "1": 코스피, "2": 코스닥)
+            top_n: 조회할 상위 종목 수
+            
+        Returns:
+            list or None: 거래량 상위 종목 목록
+        """
+        return self.market_service.get_top_traded_stocks(market_type, top_n)
+    
+    def get_stock_balance(self) -> Optional[Dict[str, Any]]:
+        """
+        주식 보유 종목 조회
+        
+        Returns:
+            dict or None: 보유 종목 정보
+        """
+        return self.account_service.get_stock_balance()
+    
+    def is_etf_stock(self, code: str) -> bool:
+        """
+        ETF 종목 여부 확인
+        
+        Args:
+            code: 종목코드
+            
+        Returns:
+            bool: ETF 종목 여부
+        """
+        return self.market_service.is_etf_stock(code)
+    
+    def fetch_balance(self) -> Optional[Dict[str, Any]]:
+        """
+        계좌 잔고 원시 데이터 조회
+        
+        Returns:
+            dict or None: 원시 계좌 잔고 데이터
+        """
+        return self.account_service.fetch_balance() 

@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 from korea_stock_auto.utils.utils import send_message
 from korea_stock_auto.api import KoreaInvestmentApiClient
 from korea_stock_auto.trading.technical_analyzer import TechnicalAnalyzer
+from korea_stock_auto.domain.entities import Stock, Position
+from korea_stock_auto.domain.value_objects import Price
 
 logger = logging.getLogger("stock_auto")
 
@@ -34,13 +36,12 @@ class TradingStrategy(abc.ABC):
         self.name = "기본 전략"
     
     @abc.abstractmethod
-    def should_buy(self, code: str, current_price: float) -> bool:
+    def should_buy(self, stock: Stock) -> bool:
         """
-        매수 시그널 확인
+        매수 시그널 확인 (도메인 엔터티 사용)
         
         Args:
-            code: 종목 코드
-            current_price: 현재 가격
+            stock: 주식 엔터티
             
         Returns:
             bool: 매수 시그널 여부
@@ -48,19 +49,19 @@ class TradingStrategy(abc.ABC):
         pass
     
     @abc.abstractmethod
-    def should_sell(self, code: str, current_price: float, entry_price: float) -> bool:
+    def should_sell(self, position: Position) -> bool:
         """
-        매도 시그널 확인
+        매도 시그널 확인 (도메인 엔터티 사용)
         
         Args:
-            code: 종목 코드
-            current_price: 현재 가격
-            entry_price: 매수 가격
+            position: 포지션 엔터티
             
         Returns:
             bool: 매도 시그널 여부
         """
         pass
+    
+
     
     def get_strategy_name(self) -> str:
         """
@@ -92,18 +93,20 @@ class MACDStrategy(TradingStrategy):
         self.profit_target_pct = 5.0  # 기본값 사용
         self.stop_loss_pct = 3.0  # 기본값 사용
     
-    def should_buy(self, code: str, current_price: float) -> bool:
+    def should_buy(self, stock: Stock) -> bool:
         """
-        MACD 매수 시그널 확인
+        MACD 매수 시그널 확인 (도메인 엔터티 사용)
         
         Args:
-            code: 종목 코드
-            current_price: 현재 가격
+            stock: 주식 엔터티
             
         Returns:
             bool: 매수 시그널 여부
         """
         try:
+            code = stock.code
+            current_price = stock.current_price.value.to_float()
+            
             # 일봉 기준 MACD 데이터 가져오기 (TechnicalAnalyzer 사용)
             macd_daily = self.analyzer.get_macd(code, interval='D', short_window=self.macd_short, long_window=self.macd_long, signal_window=self.macd_signal)
 
@@ -132,19 +135,21 @@ class MACDStrategy(TradingStrategy):
             logger.error(f"{code} MACD 매수 시그널 확인 중 오류 발생: {e}", exc_info=True)
             return False
     
-    def should_sell(self, code: str, current_price: float, entry_price: float) -> bool:
+    def should_sell(self, position: Position) -> bool:
         """
-        MACD 매도 시그널 확인
+        MACD 매도 시그널 확인 (도메인 엔터티 사용)
         
         Args:
-            code: 종목 코드
-            current_price: 현재 가격
-            entry_price: 매수 가격
+            position: 포지션 엔터티
             
         Returns:
             bool: 매도 시그널 여부
         """
         try:
+            code = position.stock.code
+            current_price = position.stock.current_price.value.to_float()
+            entry_price = position.average_price.value.to_float()
+            
             # 수익률 계산
             profit_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
             
@@ -206,18 +211,20 @@ class MovingAverageStrategy(TradingStrategy):
         self.profit_target_pct = 5.0  # 기본값 사용
         self.stop_loss_pct = 3.0  # 기본값 사용
     
-    def should_buy(self, code: str, current_price: float) -> bool:
+    def should_buy(self, stock: Stock) -> bool:
         """
-        이동평균선 매수 시그널 확인
+        이동평균선 매수 시그널 확인 (도메인 엔터티 사용)
         
         Args:
-            code: 종목 코드
-            current_price: 현재 가격
+            stock: 주식 엔터티
             
         Returns:
             bool: 매수 시그널 여부
         """
         try:
+            code = stock.code
+            current_price = stock.current_price.value.to_float()
+            
             # 골든 크로스 확인 (TechnicalAnalyzer 사용)
             is_golden = self.analyzer.check_ma_golden_cross(code, interval='D', short_period=self.short_period, long_period=self.long_period)
             
@@ -238,19 +245,21 @@ class MovingAverageStrategy(TradingStrategy):
             logger.error(f"{code} 이동평균선 매수 시그널 확인 중 오류 발생: {e}", exc_info=True)
             return False
     
-    def should_sell(self, code: str, current_price: float, entry_price: float) -> bool:
+    def should_sell(self, position: Position) -> bool:
         """
-        이동평균선 매도 시그널 확인
+        이동평균선 매도 시그널 확인 (도메인 엔터티 사용)
         
         Args:
-            code: 종목 코드
-            current_price: 현재 가격
-            entry_price: 매수 가격
+            position: 포지션 엔터티
             
         Returns:
             bool: 매도 시그널 여부
         """
         try:
+            code = position.stock.code
+            current_price = position.stock.current_price.value.to_float()
+            entry_price = position.average_price.value.to_float()
+            
             # 수익률 계산
             profit_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
             
@@ -305,18 +314,20 @@ class RSIStrategy(TradingStrategy):
         self.profit_target_pct = 5.0  # 기본값 사용
         self.stop_loss_pct = 3.0  # 기본값 사용
     
-    def should_buy(self, code: str, current_price: float) -> bool:
+    def should_buy(self, stock: Stock) -> bool:
         """
-        RSI 매수 시그널 확인 (과매도 구간 진입 후 탈출 시)
+        RSI 매수 시그널 확인 (과매도 구간 진입 후 탈출 시, 도메인 엔터티 사용)
         
         Args:
-            code: 종목 코드
-            current_price: 현재 가격
+            stock: 주식 엔터티
             
         Returns:
             bool: 매수 시그널 여부
         """
         try:
+            code = stock.code
+            current_price = stock.current_price.value.to_float()
+            
             # 일봉 기준 RSI 데이터 가져오기 (TechnicalAnalyzer 사용)
             rsi_data = self.analyzer.get_rsi_values(code, interval='D', window=self.rsi_period) 
 
@@ -336,19 +347,21 @@ class RSIStrategy(TradingStrategy):
             logger.error(f"{code} RSI 매수 시그널 확인 중 오류 발생: {e}", exc_info=True)
             return False
 
-    def should_sell(self, code: str, current_price: float, entry_price: float) -> bool:
+    def should_sell(self, position: Position) -> bool:
         """
-        RSI 매도 시그널 확인 (과매수 구간 진입 후 탈출 시)
+        RSI 매도 시그널 확인 (과매수 구간 진입 후 탈출 시, 도메인 엔터티 사용)
         
         Args:
-            code: 종목 코드
-            current_price: 현재 가격
-            entry_price: 매수 가격
+            position: 포지션 엔터티
             
         Returns:
             bool: 매도 시그널 여부
         """
         try:
+            code = position.stock.code
+            current_price = position.stock.current_price.value.to_float()
+            entry_price = position.average_price.value.to_float()
+            
             # 수익률 계산
             profit_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
             

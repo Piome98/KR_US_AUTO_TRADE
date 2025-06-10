@@ -10,6 +10,8 @@ from typing import Dict, List, Any, Optional, Tuple, Union
 from korea_stock_auto.config import AppConfig
 from korea_stock_auto.utils.utils import send_message, wait
 from korea_stock_auto.api import KoreaInvestmentApiClient
+from korea_stock_auto.domain.entities import Stock, Position
+from korea_stock_auto.domain.value_objects import Price, Quantity, Money
 
 logger = logging.getLogger("stock_auto")
 
@@ -30,6 +32,43 @@ class TradeExecutor:
         self.max_sell_attempts = config.trading.max_sell_attempts
         self.order_wait_time = config.trading.order_wait_time
         self.slippage_tolerance = config.trading.slippage_tolerance
+    
+    # 도메인 엔터티 방식의 새로운 메서드들
+    def execute_buy_order(self, stock: Stock, quantity: Quantity, price: Optional[Price] = None) -> Dict[str, Any]:
+        """
+        매수 주문 실행 (도메인 엔터티 사용)
+        
+        Args:
+            stock: 주식 엔터티
+            quantity: 주문 수량
+            price: 주문 가격 (None이면 시장가)
+            
+        Returns:
+            dict: 주문 결과 정보
+        """
+        code = stock.code
+        qty = quantity.value
+        order_price = price.value.to_float() if price else 0
+        
+        return self.execute_buy(code, order_price, qty)
+    
+    def execute_sell_order(self, position: Position, quantity: Optional[Quantity] = None, price: Optional[Price] = None) -> Dict[str, Any]:
+        """
+        매도 주문 실행 (도메인 엔터티 사용)
+        
+        Args:
+            position: 포지션 엔터티
+            quantity: 매도 수량 (None이면 전량 매도)
+            price: 주문 가격 (None이면 시장가)
+            
+        Returns:
+            dict: 주문 결과 정보
+        """
+        code = position.stock.code
+        qty = quantity.value if quantity else position.quantity.value
+        order_price = price.value.to_float() if price else 0
+        
+        return self.execute_sell(code, order_price, qty)
     
     def execute_buy(self, code: str, price: float, quantity: int) -> Dict[str, Any]:
         """

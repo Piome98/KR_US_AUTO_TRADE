@@ -378,7 +378,7 @@ class TraderV2:
             logger.info("사용자에 의한 거래 중단")
         except Exception as e:
             logger.error(f"거래 실행 중 오류 발생: {e}")
-            send_message(f"[오류] TraderV2 거래 실행 중 오류: {e}", config.notification.discord_webhook_url)
+            send_message(f"[오류] TraderV2 거래 실행 중 오류: {e}", self.config.notification.discord_webhook_url)
         finally:
             self._finalize_trading()
     
@@ -395,7 +395,7 @@ class TraderV2:
             self.monitoring_service.stop_monitoring()
             
             logger.info("TraderV2 자동 매매 정리 작업 완료")
-            send_message("[TraderV2] 자동 매매 종료", config.notification.discord_webhook_url)
+            send_message("[TraderV2] 자동 매매 종료", self.config.notification.discord_webhook_url)
             
         except Exception as e:
             logger.error(f"거래 종료 정리 중 오류: {e}") 

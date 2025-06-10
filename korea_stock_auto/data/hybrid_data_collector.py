@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, time as dt_time
 from typing import Dict, List, Optional, Any, Union
 from bs4 import BeautifulSoup
 
-from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
+from korea_stock_auto.api.client import KoreaInvestmentApiClient
 from korea_stock_auto.data.database.price_data import PriceDataManager
 
 logger = logging.getLogger(__name__)

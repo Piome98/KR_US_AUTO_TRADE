@@ -16,6 +16,10 @@ from korea_stock_auto.config import AppConfig
 from korea_stock_auto.trading.risk_manager import RiskManager
 from korea_stock_auto.utils.utils import send_message
 
+# 도메인 엔터티 import
+from korea_stock_auto.domain import Portfolio, Position, Stock
+from korea_stock_auto.domain import PortfolioDomainService
+
 logger = logging.getLogger(__name__)
 
 
@@ -137,16 +141,40 @@ class MonitoringService:
                 logger.info("보유 종목 없음")
             else:
                 for code, position_info in positions.items():
-                    self._log_position_detail(code, position_info, current_prices.get(code, 0))
+                    self._log_position_detail_legacy(code, position_info, current_prices.get(code, 0))
             
             logger.info("===========================")
             
         except Exception as e:
             logger.error(f"포트폴리오 상태 로깅 중 오류: {e}")
     
-    def _log_position_detail(self, code: str, position_info: Dict[str, Any], current_price: float) -> None:
+    def log_position_detail(self, position: Position) -> None:
         """
-        개별 포지션 상세 로깅
+        개별 포지션 상세 로깅 (도메인 엔터티 사용)
+        
+        Args:
+            position: 포지션 엔터티
+        """
+        try:
+            code = position.stock.code
+            name = position.stock.name
+            quantity = position.quantity.value
+            current_price = position.stock.current_price.value.to_float()
+            entry_price = position.average_price.value.to_float()
+            eval_value = position.current_value().to_float()
+            pnl_pct = position.unrealized_pnl_percentage().value
+            
+            logger.info(
+                f"  - {name} ({code}): {quantity}주, "
+                f"현재가 {current_price:,}, 평가액 {eval_value:,.0f}, "
+                f"수익률 {pnl_pct:.2f}% (매수가: {entry_price:,})"
+            )
+        except Exception as e:
+            logger.error(f"포지션 로깅 중 오류: {e}")
+    
+    def _log_position_detail_legacy(self, code: str, position_info: Dict[str, Any], current_price: float) -> None:
+        """
+        개별 포지션 상세 로깅 (Legacy 버전)
         
         Args:
             code: 종목 코드
@@ -169,6 +197,46 @@ class MonitoringService:
             )
         else:
             logger.info(f"  - {name} ({code}): {quantity}주 (현재가 정보 없음)")
+    
+    def monitor_portfolio(self, portfolio: Portfolio) -> None:
+        """
+        포트폴리오 모니터링 (도메인 엔터티 기반)
+        
+        Args:
+            portfolio: 포트폴리오 엔터티
+        """
+        try:
+            logger.info("===== 포트폴리오 현황 (도메인 엔터티) =====")
+            
+            # 포트폴리오 전체 지표
+            total_value = portfolio.total_value().to_float()
+            cash = portfolio.cash.to_float()
+            position_count = portfolio.get_position_count()
+            exposure_ratio = portfolio.get_exposure_ratio().value
+            
+            logger.info(f"총 자산: {total_value:,.0f}원")
+            logger.info(f"현금: {cash:,.0f}원")
+            logger.info(f"투자 노출도: {exposure_ratio:.1f}%")
+            logger.info(f"보유 종목 수: {position_count}")
+            
+            if not portfolio.positions:
+                logger.info("보유 종목 없음")
+            else:
+                # 각 포지션 상세 로깅
+                for position in portfolio.positions.values():
+                    if not position.is_empty():
+                        self.log_position_detail(position)
+            
+            # 포트폴리오 메트릭 계산
+            metrics = PortfolioDomainService.calculate_portfolio_metrics(portfolio)
+            if metrics:
+                logger.info(f"총 투자비용: {metrics.get('total_cost', 0):,.0f}원")
+                logger.info(f"총 수익률: {metrics.get('total_return_pct', 0):.2f}%")
+            
+            logger.info("=========================================")
+            
+        except Exception as e:
+            logger.error(f"포트폴리오 모니터링 중 오류: {e}")
     
     def send_trading_notification(self, message: str, level: str = "info") -> None:
         """

@@ -12,7 +12,7 @@ from datetime import datetime
 
 from korea_stock_auto.config import get_config, AppConfig
 from korea_stock_auto.utils.utils import send_message, setup_logger
-from korea_stock_auto.service_factory import configure_services, get_service
+from korea_stock_auto.service_factory import configure_services, get_scoped_service, create_trading_session_scope
 from korea_stock_auto.trading.trader_v2 import TraderV2
 
 
@@ -81,9 +81,6 @@ def main():
         
         # 모드에 따른 처리
         if args.mode == 'trade':
-            # TraderV2 가져오기 (DI 컨테이너에서)
-            trader = get_service(TraderV2)
-            
             # API 설정 정보 출력
             api_type = "실전투자" if config.use_realtime_api else "모의투자"
             trade_mode = "실제매매" if config.use_realtime_api else "시뮬레이션"
@@ -93,10 +90,15 @@ def main():
             logger.info(f"설정된 전략: {config.trading.strategy}")
             logger.info("TraderV2 (서비스 계층) 사용")
             
-            send_message(f"[시스템 설정] API: {api_type}, 거래모드: {trade_mode}, 전략: {config.trading.strategy}, TraderV2 활성화")
+            send_message(f"[시스템 설정] API: {api_type}, 거래모드: {trade_mode}, 전략: {config.trading.strategy}, TraderV2 활성화", config.notification.discord_webhook_url)
             
-            # 매매 실행
-            trader.run_trading(max_cycles=args.cycles)
+            # 매매 세션 스코프 내에서 TraderV2 실행
+            with create_trading_session_scope():
+                trader = get_scoped_service(TraderV2)
+                logger.info("TraderV2 인스턴스 생성 완료 (스코프 세션 내)")
+                
+                # 매매 실행
+                trader.run_trading(max_cycles=args.cycles)
             
         elif args.mode == 'backtest':
             logger.info("백테스트 모드는 아직 구현되지 않았습니다.")

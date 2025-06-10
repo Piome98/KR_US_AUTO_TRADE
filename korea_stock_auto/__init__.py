@@ -1,18 +1,17 @@
 """
-한국 주식 자동매매 - 메인 패키지
-Korea Investment Auto Trading System
+한국 주식 자동매매 프로그램
 """
 
-__version__ = "1.0.0"
-
-# 모듈별 주요 기능 임포트
-from korea_stock_auto.trading.trader import Trader
-from korea_stock_auto.api.api_client.base.client import KoreaInvestmentApiClient
-
+from korea_stock_auto.config import AppConfig
+from korea_stock_auto.api import KoreaInvestmentApiClient
+from korea_stock_auto.trading import TraderV2
+from korea_stock_auto.service_factory import configure_services
 
 __all__ = [
-    'Trader',
+    'AppConfig',
     'KoreaInvestmentApiClient',
+    'TraderV2',
+    'configure_services',
 ]
 
 # 패키지 인식

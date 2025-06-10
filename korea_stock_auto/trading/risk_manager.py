@@ -62,7 +62,7 @@ class RiskManager:
         """
         try:
             # 현금 잔고 조회
-            cash_balance_info = self.api.get_balance()
+            cash_balance_info = self.api.get_account_balance()
             cash_balance = cash_balance_info.get("cash", 0) if cash_balance_info else 0
             
             # 주식 잔고 조회
