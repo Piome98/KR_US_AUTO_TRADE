@@ -62,7 +62,7 @@ class KoreaInvestmentApiClient:
         self.issue_access_token()
         
         # 컴포지션 패턴: 각 도메인별 서비스 초기화
-        from korea_stock_auto.api.clients import MarketService, OrderService, AccountService
+        from korea_stock_auto.api.patterns import MarketService, OrderService, AccountService
         self.market_service = MarketService(self)
         self.order_service = OrderService(self)
         self.account_service = AccountService(self)

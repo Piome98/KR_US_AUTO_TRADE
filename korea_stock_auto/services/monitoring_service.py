@@ -257,7 +257,7 @@ class MonitoringService:
             
             # 디스코드 알림 (설정이 활성화된 경우)
             if self.config.notification.enable_discord:
-                send_message(message, config.notification.discord_webhook_url)
+                send_message(message, self.config.notification.discord_webhook_url)
                 
         except Exception as e:
             logger.error(f"알림 발송 중 오류: {e}")

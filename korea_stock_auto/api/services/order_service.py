@@ -118,7 +118,7 @@ class OrderService:
             except MappingError as e:
                 logger.warning(f"Order 매핑 실패, clients.order_client를 통한 생성으로 폴백: {e}")
                 # 백워드 호환성: OrderClient의 메서드 사용
-                from korea_stock_auto.api.clients.order_client import OrderService as OrderClient
+                from korea_stock_auto.api.patterns.order_pattern import OrderService as OrderClient
                 order_client = OrderClient(self.api_client)
                 return order_client._create_order_entity_legacy(raw_response, stock, OrderType.BUY, qty, price)
                 
@@ -261,7 +261,7 @@ class OrderService:
             except MappingError as e:
                 logger.warning(f"Order 매핑 실패, clients.order_client를 통한 생성으로 폴백: {e}")
                 # 백워드 호환성: OrderClient의 메서드 사용
-                from korea_stock_auto.api.clients.order_client import OrderService as OrderClient
+                from korea_stock_auto.api.patterns.order_pattern import OrderService as OrderClient
                 order_client = OrderClient(self.api_client)
                 return order_client._create_order_entity_legacy(raw_response, stock, OrderType.SELL, qty, price)
                 

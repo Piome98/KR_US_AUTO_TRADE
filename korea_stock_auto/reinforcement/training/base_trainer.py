@@ -90,7 +90,7 @@ class BaseTrainer:
             data = self.db_manager.execute_query(query, (code, start_date, end_date))
             
             if data is None or len(data) == 0:
-                send_message(f"데이터 로드 실패: 해당 기간에 {code} 데이터가 없습니다.", config.notification.discord_webhook_url)
+                send_message(f"데이터 로드 실패: 해당 기간에 {code} 데이터가 없습니다.", self.config.notification.discord_webhook_url)
                 logger.warning(f"데이터 로드 실패: 해당 기간에 {code} 데이터가 없습니다.")
                 return None
             
