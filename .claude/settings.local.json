@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(for file in /mnt/c/Users/piome/Desktop/백엔드 부트캠프/koreainvestment-autotrade-main/korea_stock_auto/{main.py,__init__.py,service_factory.py,di_container.py})",
+      "Bash(do echo \"=== $file ===\")",
+      "Bash(done)",
+      "Bash(rg:*)"
+    ],
+    "deny": []
+  }
+}
